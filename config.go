@@ -61,5 +61,9 @@ func configPathNextToBinary() string {
 	if err != nil {
 		return ""
 	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
 	return filepath.Join(filepath.Dir(exe), ".fondue.json")
 }
