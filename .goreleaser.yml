@@ -1,7 +1,7 @@
 version: 2
 
 builds:
-  - binary: swissgit
+  - binary: fondue
     env:
       - CGO_ENABLED=0
     goos:

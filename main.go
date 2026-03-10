@@ -184,11 +184,43 @@ func printJSON(services []scanner.Service) {
 
 // ── DOT (Graphviz) export ───────────────────────────────────────────
 
+// heatColor maps a 0.0–1.0 intensity to a cool→hot gradient (blue→cyan→green→yellow→red).
+func heatColor(t float64) string {
+	type rgb struct{ r, g, b int }
+	stops := []rgb{{66, 133, 244}, {52, 211, 153}, {251, 191, 36}, {239, 68, 68}}
+	t = max(0, min(1, t))
+	scaled := t * float64(len(stops)-1)
+	i := int(scaled)
+	if i >= len(stops)-1 {
+		return fmt.Sprintf("#%02x%02x%02x", stops[len(stops)-1].r, stops[len(stops)-1].g, stops[len(stops)-1].b)
+	}
+	f := scaled - float64(i)
+	r := int(float64(stops[i].r)*(1-f) + float64(stops[i+1].r)*f)
+	g := int(float64(stops[i].g)*(1-f) + float64(stops[i+1].g)*f)
+	b := int(float64(stops[i].b)*(1-f) + float64(stops[i+1].b)*f)
+	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
+}
+
 func printDOT(services []scanner.Service, idx *scanner.NameIndex) {
+	// Find max dependents for heat scaling
+	maxDeps := 0
+	for _, svc := range services {
+		total := len(svc.DependedOnBy) + len(svc.Integrations)
+		if total > maxDeps {
+			maxDeps = total
+		}
+	}
+
 	fmt.Println("digraph services {")
+	fmt.Println("  bgcolor=\"#1a1b26\";")
 	fmt.Println("  rankdir=LR;")
-	fmt.Println("  node [shape=box, style=rounded, fontname=\"Helvetica\"];")
-	fmt.Println("  edge [color=\"#666666\"];")
+	fmt.Println("  pad=0.5;")
+	fmt.Println("  nodesep=0.6;")
+	fmt.Println("  ranksep=1.2;")
+	fmt.Println("  concentrate=false;")
+	fmt.Println("  splines=true;")
+	fmt.Println("  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\", fontsize=11, fontcolor=\"#c0caf5\", color=\"#3b4261\", fillcolor=\"#24283b\", penwidth=1.5];")
+	fmt.Println("  edge [color=\"#3b4261\", arrowsize=0.7, penwidth=1.2];")
 	fmt.Println()
 
 	for _, svc := range services {
@@ -196,7 +228,19 @@ func printDOT(services []scanner.Service, idx *scanner.NameIndex) {
 		if svc.Version != "" {
 			label += "\\n" + svc.Version
 		}
-		fmt.Printf("  \"%s\" [label=\"%s\"];\n", svc.Name, label)
+		total := len(svc.DependedOnBy) + len(svc.Integrations)
+		t := 0.0
+		if maxDeps > 0 {
+			t = float64(total) / float64(maxDeps)
+		}
+		color := heatColor(t)
+		stale := scanner.StaleCount(&svc, services, idx)
+		fill := "#24283b"
+		if stale > 0 {
+			fill = "#2d1f2f"
+			label += fmt.Sprintf("\\n⚠ %d stale", stale)
+		}
+		fmt.Printf("  \"%s\" [label=\"%s\", color=\"%s\", fillcolor=\"%s\", penwidth=%.1f];\n", svc.Name, label, color, fill, 1.5+t*2.5)
 	}
 
 	fmt.Println()
@@ -204,22 +248,32 @@ func printDOT(services []scanner.Service, idx *scanner.NameIndex) {
 	externals := make(map[string]bool)
 
 	for _, svc := range services {
+		total := len(svc.DependedOnBy) + len(svc.Integrations)
+		t := 0.0
+		if maxDeps > 0 {
+			t = float64(total) / float64(maxDeps)
+		}
+		edgeColor := heatColor(t * 0.6)
 		for _, integ := range svc.Integrations {
 			target := idx.Resolve(integ.ClientID)
 			if target != "" {
-				fmt.Printf("  \"%s\" -> \"%s\";\n", svc.Name, target)
+				fmt.Printf("  \"%s\" -> \"%s\" [color=\"%s\"];\n", svc.Name, target, edgeColor)
 			} else {
-				externals[integ.ClientID] = true
-				fmt.Printf("  \"%s\" -> \"%s\";\n", svc.Name, integ.ClientID)
+				extID := strings.ToLower(integ.ClientID)
+				externals[extID] = true
+				fmt.Printf("  \"%s\" -> \"%s\" [color=\"%s\", style=dashed];\n", svc.Name, extID, edgeColor)
 			}
 		}
 	}
 
 	if len(externals) > 0 {
 		fmt.Println()
+		fmt.Println("  subgraph cluster_external {")
+		fmt.Println("    style=dashed; color=\"#3b4261\"; fontcolor=\"#565f89\"; fontname=\"Helvetica\"; label=\"external\";")
 		for ext := range externals {
-			fmt.Printf("  \"%s\" [style=dashed, color=\"#999999\", fontcolor=\"#999999\"];\n", ext)
+			fmt.Printf("    \"%s\" [style=\"rounded,dashed,filled\", fillcolor=\"#1a1b26\", color=\"#565f89\", fontcolor=\"#565f89\"];\n", ext)
 		}
+		fmt.Println("  }")
 	}
 
 	fmt.Println("}")
