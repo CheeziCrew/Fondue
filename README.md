@@ -27,7 +27,7 @@ fondue                              # Interactive TUI (default path)
 fondue ~/code/myproject             # Scan specific directory
 fondue --list                       # Table output
 fondue --json | jq '.[] | select(.dependencies | length > 5)'
-fondue --dot | dot -Tpng -o graph.png && open graph.png
+fondue --dot | dot -Tpng -o graph.png && open graph.png  # requires graphviz
 ```
 
 ### Flags
@@ -82,6 +82,14 @@ To override, drop a `.fondue.json` in your scan directory or next to the binary.
 | `repoPrefixes` | `["api-service-", "pw-"]` | Directory prefixes to scan (prefix is stripped to derive service name) |
 | `standaloneRepos` | See `config.go` | Map of `dirName` → `serviceName` for repos that don't follow prefix conventions |
 
+## Prerequisites
+
+| What | Required | Why |
+|------|----------|-----|
+| Maven-based Java services | Yes | Fondue scans `pom.xml` and `src/main/java` integration packages |
+| [Go 1.25+](https://go.dev/dl/) | Only for `go install` | Not needed if using a prebuilt binary |
+| [Graphviz](https://graphviz.org/) | Only for `--dot` piping | Provides the `dot` command (`brew install graphviz`) |
+
 ## How it works
 
 1. Globs for directories matching configured prefixes
@@ -92,6 +100,10 @@ To override, drop a `.fondue.json` in your scan directory or next to the binary.
 6. Builds bidirectional dependency graph
 7. Renders everything in a Bubbletea TUI
 
+## Acknowledgements
+
+**Theo the Cat** — moral support department, head of naps division.
+
 ## License
 
-MIT
+[MIT](LICENSE)
