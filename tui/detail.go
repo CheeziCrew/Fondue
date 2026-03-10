@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/cheezi/service-map/scanner"
+	"github.com/CheeziCrew/fondue/scanner"
 )
 
 func renderDetail(m Model) string {
@@ -15,7 +15,7 @@ func renderDetail(m Model) string {
 		return ""
 	}
 
-	contentWidth := m.width - 8 // account for box padding + margins
+	contentWidth := m.width - 8
 	if contentWidth < 40 {
 		contentWidth = 40
 	}
@@ -30,11 +30,6 @@ func renderDetail(m Model) string {
 	titleLine := detailTitleStyle.Render(fmt.Sprintf("  %s", title))
 	content.WriteString(titleLine + "\n")
 	content.WriteString(detailPathStyle.Render(svc.Path) + "\n")
-
-	// Version line
-	if svc.Version != "" {
-		content.WriteString(versionDimStyle.Render("  v"+svc.Version) + "\n")
-	}
 
 	// Stats bar
 	outCount := len(svc.Integrations)
@@ -56,11 +51,10 @@ func renderDetail(m Model) string {
 	if outCount == 0 {
 		content.WriteString(noneStyle.Render("  no outbound dependencies") + "\n")
 	} else {
-		navigable := getNavigableIntegrations(svc.Integrations, m.services)
+		navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
 		for _, integ := range svc.Integrations {
-			isInternal := scanner.IsInternal(integ.ClientID, m.services)
+			isInternal := m.nameIdx.IsInternal(integ.ClientID)
 
-			// Check if this item is the cursor target
 			navIdx := -1
 			for ni, nInteg := range navigable {
 				if nInteg.ClientID == integ.ClientID {
@@ -88,9 +82,8 @@ func renderDetail(m Model) string {
 				line += " " + externalTagStyle.Render("ext")
 			}
 
-			// Version annotation for internal integrations
 			if isInternal {
-				line += renderVersionAnnotation(integ, m.services)
+				line += renderVersionAnnotation(integ, m.services, m.nameIdx)
 			}
 
 			content.WriteString(prefix + line + "\n")
@@ -108,7 +101,7 @@ func renderDetail(m Model) string {
 	if inCount == 0 {
 		content.WriteString(noneStyle.Render("  no inbound dependencies") + "\n")
 	} else {
-		navigable := getNavigableIntegrations(svc.Integrations, m.services)
+		navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
 		navOffset := len(navigable)
 
 		for i, dep := range svc.DependedOnBy {
@@ -123,6 +116,9 @@ func renderDetail(m Model) string {
 				line = internalStyle.Render(dep)
 			}
 
+			// Show stale indicator if the dependent is using an outdated spec of us
+			line += renderReverseStaleAnnotation(dep, svc, m.services, m.nameIdx)
+
 			content.WriteString(prefix + line + "\n")
 		}
 	}
@@ -131,14 +127,19 @@ func renderDetail(m Model) string {
 	box := detailBoxStyle.Width(contentWidth).Render(content.String())
 
 	// ── Help bar ────────────────────────────────────────────────────
-	help := renderHintBar()
+	help := renderHintBar(len(m.navStack) > 0)
 
 	return lipgloss.JoinVertical(lipgloss.Left, box, help)
 }
 
-func renderHintBar() string {
+func renderHintBar(hasHistory bool) string {
+	backDesc := "back"
+	if hasHistory {
+		backDesc = "back (history)"
+	}
+
 	hints := []struct{ key, desc string }{
-		{"esc", "back"},
+		{"esc", backDesc},
 		{"enter", "navigate"},
 		{"j/k", "move"},
 		{"q", "quit"},
@@ -156,12 +157,12 @@ func renderHintBar() string {
 	)
 }
 
-func renderVersionAnnotation(integ scanner.Integration, services []scanner.Service) string {
+func renderVersionAnnotation(integ scanner.Integration, services []scanner.Service, idx *scanner.NameIndex) string {
 	if integ.SpecVersion == "" {
 		return ""
 	}
 
-	targetName := scanner.ResolveTargetName(integ.ClientID, services)
+	targetName := idx.Resolve(integ.ClientID)
 	if targetName == "" {
 		return ""
 	}
@@ -177,29 +178,60 @@ func renderVersionAnnotation(integ scanner.Integration, services []scanner.Servi
 	return " " + staleStyle.Render(integ.SpecVersion+" → "+target.Version+" STALE")
 }
 
-func getNavigableIntegrations(integrations []scanner.Integration, services []scanner.Service) []scanner.Integration {
+// renderReverseStaleAnnotation checks if `depName` has an integration pointing at `svc`
+// with a spec version that doesn't match svc.Version.
+func renderReverseStaleAnnotation(depName string, svc *scanner.Service, services []scanner.Service, idx *scanner.NameIndex) string {
+	if svc.Version == "" {
+		return ""
+	}
+
+	dependent := scanner.FindService(depName, services)
+	if dependent == nil {
+		return ""
+	}
+
+	for _, integ := range dependent.Integrations {
+		if integ.SpecVersion == "" {
+			continue
+		}
+		target := idx.Resolve(integ.ClientID)
+		if target != svc.Name {
+			continue
+		}
+		if integ.SpecVersion == svc.Version {
+			return " " + versionMatchStyle.Render(integ.SpecVersion + " ✓")
+		}
+		return " " + staleStyle.Render(integ.SpecVersion + " → " + svc.Version + " STALE")
+	}
+	return ""
+}
+
+func getNavigableIntegrations(integrations []scanner.Integration, idx *scanner.NameIndex) []scanner.Integration {
 	var nav []scanner.Integration
 	for _, integ := range integrations {
-		if scanner.IsInternal(integ.ClientID, services) {
+		if idx.IsInternal(integ.ClientID) {
 			nav = append(nav, integ)
 		}
 	}
 	return nav
 }
 
-func getNavigableCount(svc *scanner.Service, services []scanner.Service) int {
-	return len(getNavigableIntegrations(svc.Integrations, services)) + len(svc.DependedOnBy)
+func getNavigableCount(svc *scanner.Service, idx *scanner.NameIndex) int {
+	return len(getNavigableIntegrations(svc.Integrations, idx)) + len(svc.DependedOnBy)
 }
 
 func handleDetailUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		maxItems := getNavigableCount(m.selectedService, m.services)
+		maxItems := getNavigableCount(m.selectedService, m.nameIdx)
 
 		switch msg.String() {
 		case "esc", "backspace":
-			m.view = listView
-			m.detailCursor = 0
+			// Try popping nav stack first, fall back to list view
+			if !m.popNav() {
+				m.view = listView
+				m.detailCursor = 0
+			}
 			return m, nil
 
 		case "up", "k":
@@ -219,6 +251,7 @@ func handleDetailUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 			if targetName != "" {
 				for i := range m.services {
 					if m.services[i].Name == targetName {
+						m.pushNav() // save current state
 						m.selectedService = &m.services[i]
 						m.detailCursor = 0
 						return m, nil
@@ -236,29 +269,16 @@ func handleDetailUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 
 func resolveDetailTarget(m Model) string {
 	svc := m.selectedService
-	navigable := getNavigableIntegrations(svc.Integrations, m.services)
+	navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
 	navOffset := len(navigable)
 
 	if m.detailCursor < navOffset {
-		clientID := navigable[m.detailCursor].ClientID
-		nameMap := make(map[string]string)
-		for _, s := range m.services {
-			nameMap[s.Name] = s.Name
-			nameMap[strings.ReplaceAll(s.Name, "-", "")] = s.Name
-		}
-		lower := strings.ToLower(clientID)
-		if name, ok := nameMap[lower]; ok {
-			return name
-		}
-		stripped := strings.ReplaceAll(lower, "-", "")
-		if name, ok := nameMap[stripped]; ok {
-			return name
-		}
-	} else {
-		idx := m.detailCursor - navOffset
-		if idx < len(svc.DependedOnBy) {
-			return svc.DependedOnBy[idx]
-		}
+		return m.nameIdx.Resolve(navigable[m.detailCursor].ClientID)
+	}
+
+	idx := m.detailCursor - navOffset
+	if idx < len(svc.DependedOnBy) {
+		return svc.DependedOnBy[idx]
 	}
 	return ""
 }

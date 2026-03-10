@@ -8,7 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/cheezi/service-map/scanner"
+	"github.com/CheeziCrew/fondue/scanner"
+	"github.com/sahilm/fuzzy"
 )
 
 // serviceItem implements list.Item for the bubbles list component.
@@ -29,7 +30,9 @@ func (i serviceItem) FilterValue() string {
 
 // ── Custom delegate ─────────────────────────────────────────────────
 
-type serviceDelegate struct{}
+type serviceDelegate struct {
+	nameIdx *scanner.NameIndex
+}
 
 func (d serviceDelegate) Height() int                             { return 3 }
 func (d serviceDelegate) Spacing() int                            { return 1 }
@@ -93,8 +96,8 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 		badges = "  " + isoBadge.Render("○ isolated")
 	}
 
-	// Stale badge — need access to all services for comparison
-	staleCount := scanner.StaleCount(&svc, allServices(m))
+	// Stale badge
+	staleCount := scanner.StaleCount(&svc, allServices(m), d.nameIdx)
 	if staleCount > 0 {
 		staleBadge := lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
 		if selected {
@@ -137,7 +140,6 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 		lines += "\n" + line3
 	}
 
-	// Pad missing lines to maintain consistent height
 	lineCount := 1
 	if line2 != "" {
 		lineCount++
@@ -201,38 +203,29 @@ func allServices(m list.Model) []scanner.Service {
 	return services
 }
 
-// substringFilter matches items whose filter value contains the search term
-// as a case-insensitive substring. No fuzzy matching.
-func substringFilter(term string, targets []string) []list.Rank {
-	term = strings.ToLower(term)
+// ── Fuzzy filter ────────────────────────────────────────────────────
+
+func fuzzyFilter(term string, targets []string) []list.Rank {
+	matches := fuzzy.Find(term, targets)
 	var ranks []list.Rank
-	for i, t := range targets {
-		lower := strings.ToLower(t)
-		idx := strings.Index(lower, term)
-		if idx >= 0 {
-			// Build matched indices for highlighting
-			matchedIndexes := make([]int, len(term))
-			for j := range term {
-				matchedIndexes[j] = idx + j
-			}
-			ranks = append(ranks, list.Rank{
-				Index:          i,
-				MatchedIndexes: matchedIndexes,
-			})
-		}
+	for _, m := range matches {
+		ranks = append(ranks, list.Rank{
+			Index:          m.Index,
+			MatchedIndexes: m.MatchedIndexes,
+		})
 	}
 	return ranks
 }
 
-func newServiceList(services []scanner.Service, width, height int) list.Model {
+func newServiceList(services []scanner.Service, idx *scanner.NameIndex, width, height int) list.Model {
 	items := make([]list.Item, len(services))
 	for i, s := range services {
 		items[i] = serviceItem{service: s}
 	}
 
-	l := list.New(items, serviceDelegate{}, width, height)
-	l.Filter = substringFilter
-	l.Title = "  Service Map"
+	l := list.New(items, serviceDelegate{nameIdx: idx}, width, height)
+	l.Filter = fuzzyFilter
+	l.Title = "  Fondue"
 	l.Styles.Title = listTitleStyle
 	l.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	l.Styles.FilterCursor = lipgloss.NewStyle().Foreground(colorAccent)
@@ -246,7 +239,6 @@ func newServiceList(services []scanner.Service, width, height int) list.Model {
 func handleListUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Don't handle enter while filtering
 		if m.list.FilterState() == list.Filtering {
 			break
 		}
@@ -255,6 +247,7 @@ func handleListUpdate(m Model, msg tea.Msg) (Model, tea.Cmd) {
 			if item, ok := m.list.SelectedItem().(serviceItem); ok {
 				m.selectedService = &item.service
 				m.view = detailView
+				m.navStack = nil // fresh detail view, clear history
 				return m, nil
 			}
 		}

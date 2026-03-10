@@ -2,49 +2,77 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// ── Color palette ───────────────────────────────────────────────────
+// ── Theme ───────────────────────────────────────────────────────────
+// All colors flow through Theme so swapping palettes is trivial.
 // Uses ANSI 0-15 so colors follow the terminal theme (base16 via Tinty etc).
-//
-//	0  background     8  bright black (comments/dim)
-//	1  red            9  bright red
-//	2  green         10  (base01)
-//	3  yellow        11  (base02)
-//	4  blue          12  (base04)
-//	5  magenta       13  bright magenta
-//	6  cyan          14  bright cyan
-//	7  foreground    15  bright white
+
+type Theme struct {
+	Bg      lipgloss.Color
+	Fg      lipgloss.Color
+	Dim     lipgloss.Color
+	Red     lipgloss.Color
+	Green   lipgloss.Color
+	Yellow  lipgloss.Color
+	Blue    lipgloss.Color
+	Magenta lipgloss.Color
+	Cyan    lipgloss.Color
+	Accent  lipgloss.Color
+	BrCyan  lipgloss.Color
+	BrWhite lipgloss.Color
+}
+
+// DefaultTheme uses ANSI 0-15, adapts to terminal color scheme.
+var DefaultTheme = Theme{
+	Bg:      lipgloss.Color("0"),
+	Fg:      lipgloss.Color("7"),
+	Dim:     lipgloss.Color("8"),
+	Red:     lipgloss.Color("1"),
+	Green:   lipgloss.Color("2"),
+	Yellow:  lipgloss.Color("3"),
+	Blue:    lipgloss.Color("4"),
+	Magenta: lipgloss.Color("5"),
+	Cyan:    lipgloss.Color("6"),
+	Accent:  lipgloss.Color("13"),
+	BrCyan:  lipgloss.Color("14"),
+	BrWhite: lipgloss.Color("15"),
+}
+
+// Active theme — change this to swap palettes.
+var t = DefaultTheme
+
+// ── Derived color vars (for backward compat in rendering code) ─────
 var (
-	colorBg      = lipgloss.Color("0")
-	colorRed     = lipgloss.Color("1")
-	colorGreen   = lipgloss.Color("2")
-	colorYellow  = lipgloss.Color("3")
-	colorBlue    = lipgloss.Color("4")
-	colorMagenta = lipgloss.Color("5")
-	colorCyan    = lipgloss.Color("6")
-	colorFg      = lipgloss.Color("7")
-	colorDim     = lipgloss.Color("8")
-	colorAccent  = lipgloss.Color("13") // bright magenta — primary accent
-	colorBrCyan  = lipgloss.Color("14")
-	colorBrWhite = lipgloss.Color("15")
+	colorBg      = t.Bg
+	colorRed     = t.Red
+	colorGreen   = t.Green
+	colorYellow  = t.Yellow
+	colorBlue    = t.Blue
+	colorMagenta = t.Magenta
+	colorCyan    = t.Cyan
+	colorFg      = t.Fg
+	colorDim     = t.Dim
+	colorAccent  = t.Accent
+	colorBrCyan  = t.BrCyan
+	colorBrWhite = t.BrWhite
 )
 
 // ── List view styles ────────────────────────────────────────────────
 var (
 	listTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorAccent).
+			Foreground(t.Accent).
 			Padding(0, 2).
 			MarginBottom(1)
 
 	dimStyle = lipgloss.NewStyle().
-			Foreground(colorDim)
+			Foreground(t.Dim)
 )
 
 // ── Detail view styles ──────────────────────────────────────────────
 var (
 	detailBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorMagenta).
+			BorderForeground(t.Magenta).
 			Padding(1, 2).
 			MarginTop(1).
 			MarginLeft(2).
@@ -52,90 +80,86 @@ var (
 
 	detailTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(colorAccent).
+				Foreground(t.Accent).
 				Padding(0, 1).
 				MarginBottom(1)
 
 	detailPathStyle = lipgloss.NewStyle().
-			Foreground(colorDim).
+			Foreground(t.Dim).
 			Italic(true).
 			PaddingLeft(1)
 
-	// Detail view badges — we own the full render so background colors are safe.
 	badgeOutStyle = lipgloss.NewStyle().
-			Foreground(colorBg).
-			Background(colorMagenta).
+			Foreground(t.Bg).
+			Background(t.Magenta).
 			Bold(true).
 			Padding(0, 1)
 
 	badgeInStyle = lipgloss.NewStyle().
-			Foreground(colorBg).
-			Background(colorGreen).
+			Foreground(t.Bg).
+			Background(t.Green).
 			Bold(true).
 			Padding(0, 1)
 
 	sectionHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(colorCyan).
+				Foreground(t.Cyan).
 				PaddingTop(1).
 				PaddingBottom(0).
 				PaddingLeft(1)
 
 	sectionCountStyle = lipgloss.NewStyle().
-				Foreground(colorDim)
+				Foreground(t.Dim)
 
 	internalStyle = lipgloss.NewStyle().
-			Foreground(colorGreen)
+			Foreground(t.Green)
 
 	externalStyle = lipgloss.NewStyle().
-			Foreground(colorYellow)
+			Foreground(t.Yellow)
 
 	externalTagStyle = lipgloss.NewStyle().
-				Foreground(colorRed).
+				Foreground(t.Red).
 				Bold(true)
 
 	cursorStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorAccent)
+			Foreground(t.Accent)
 
 	noneStyle = lipgloss.NewStyle().
-			Foreground(colorDim).
+			Foreground(t.Dim).
 			Italic(true).
 			PaddingLeft(3)
 
 	hintBarStyle = lipgloss.NewStyle().
-			Foreground(colorDim).
+			Foreground(t.Dim).
 			Border(lipgloss.NormalBorder(), true, false, false, false).
-			BorderForeground(colorDim).
+			BorderForeground(t.Dim).
 			PaddingTop(0).
 			MarginTop(1).
 			PaddingLeft(1)
 
 	hintKeyStyle = lipgloss.NewStyle().
-			Foreground(colorAccent).
+			Foreground(t.Accent).
 			Bold(true)
 
 	hintSepStyle = lipgloss.NewStyle().
-			Foreground(colorDim)
+			Foreground(t.Dim)
 
 	hintDescStyle = lipgloss.NewStyle().
-			Foreground(colorFg)
+			Foreground(t.Fg)
 
 	arrowOutStyle = lipgloss.NewStyle().
-			Foreground(colorMagenta).
+			Foreground(t.Magenta).
 			Bold(true)
 
 	arrowInStyle = lipgloss.NewStyle().
-			Foreground(colorGreen).
+			Foreground(t.Green).
 			Bold(true)
 
 	staleStyle = lipgloss.NewStyle().
-			Foreground(colorYellow).
+			Foreground(t.Yellow).
 			Bold(true)
 
 	versionMatchStyle = lipgloss.NewStyle().
-				Foreground(colorGreen)
-
-	versionDimStyle = lipgloss.NewStyle().
-			Foreground(colorDim)
+				Foreground(t.Green)
 )

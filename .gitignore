@@ -1,0 +1,19 @@
+# Binary
+fondue
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+dist/
+vendor/
+
+# Config (user-specific)
+.fondue.json

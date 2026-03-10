@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,43 +23,70 @@ type Service struct {
 	DependedOnBy []string      // computed: which services integrate with this one
 }
 
-// Repo prefixes to scan, in order. The prefix is stripped to derive the service name.
-// More specific prefixes first — a repo matched by an earlier prefix won't be re-scanned.
-var repoPrefixes = []string{
-	"api-service-",
-	"pw-",
+// ScanConfig holds the configurable parts of scanning.
+type ScanConfig struct {
+	RepoPrefixes    []string
+	StandaloneRepos map[string]string
 }
 
-// Standalone repos that don't follow standard prefixes but are real services.
-var standaloneRepos = map[string]string{
-	"api-comfact-facade": "comfact-facade",
-	"cimd-proxy":         "cimd-proxy",
-	"formpipe-proxy":     "formpipe-proxy",
+// NameIndex is a pre-computed lookup for resolving client IDs to service names.
+// Built once after scanning, reused everywhere.
+type NameIndex struct {
+	nameMap map[string]string
 }
 
 var (
 	clientIDRegex        = regexp.MustCompile(`CLIENT_ID\s*=\s*"([^"]+)"`)
 	integrationNameRegex = regexp.MustCompile(`INTEGRATION_NAME\s*=\s*"([^"]+)"`)
-	pomVersionRegex      = regexp.MustCompile(`<version>([^<]+)</version>`)
-	inputSpecRegex       = regexp.MustCompile(`<inputSpec>[^<]*?([^/<]+\.ya?ml)</inputSpec>`)
-	specVersionRegex     = regexp.MustCompile(`(?m)^\s+version:\s*["']?([^"'\n\r]+)["']?\s*$`)
-	specFileCleanRegex   = regexp.MustCompile(`(?i)(-api|-(v?\d+(\.\d+)*))?\.ya?ml$`)
+	specFileCleanRegex   = regexp.MustCompile(`(?i)(-api)?(-(v?\d+(\.\d+)*))?\.ya?ml$`)
 )
 
-func Scan(basePath string) ([]Service, error) {
+// ── XML structs for proper pom.xml parsing ──────────────────────────
+
+type pomProject struct {
+	XMLName xml.Name   `xml:"project"`
+	Version string     `xml:"version"`
+	Build   *pomBuild  `xml:"build"`
+}
+
+type pomBuild struct {
+	Plugins pomPlugins `xml:"plugins"`
+}
+
+type pomPlugins struct {
+	Plugins []pomPlugin `xml:"plugin"`
+}
+
+type pomPlugin struct {
+	Executions pomExecutions `xml:"executions"`
+}
+
+type pomExecutions struct {
+	Executions []pomExecution `xml:"execution"`
+}
+
+type pomExecution struct {
+	Configuration pomConfiguration `xml:"configuration"`
+}
+
+type pomConfiguration struct {
+	InputSpec string `xml:"inputSpec"`
+}
+
+func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 	basePath, err := filepath.Abs(basePath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	services := make([]Service, 0, 80)
 	serviceNames := make(map[string]bool)
 
 	// Scan prefixed repos
-	for _, prefix := range repoPrefixes {
+	for _, prefix := range cfg.RepoPrefixes {
 		dirs, err := filepath.Glob(filepath.Join(basePath, prefix+"*"))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		for _, dir := range dirs {
@@ -67,7 +95,6 @@ func Scan(basePath string) ([]Service, error) {
 				continue
 			}
 
-			// Must have src/main/java to be a service
 			if _, err := os.Stat(filepath.Join(dir, "src", "main", "java")); err != nil {
 				continue
 			}
@@ -91,7 +118,7 @@ func Scan(basePath string) ([]Service, error) {
 	}
 
 	// Scan standalone repos
-	for dirName, serviceName := range standaloneRepos {
+	for dirName, serviceName := range cfg.StandaloneRepos {
 		dir := filepath.Join(basePath, dirName)
 		if _, err := os.Stat(filepath.Join(dir, "src", "main", "java")); err != nil {
 			continue
@@ -112,20 +139,19 @@ func Scan(basePath string) ([]Service, error) {
 		services = append(services, svc)
 	}
 
-	// Normalize CLIENT_IDs: if a CLIENT_ID doesn't resolve to any service but
-	// looks like a variant of a known service (e.g. "PartyClient" for "party",
-	// "messagingClient" for "messaging"), replace it with the service name.
-	nameMap := buildNameMap(serviceNames)
+	// Build name index once
+	idx := NewNameIndex(serviceNames)
+
+	// Normalize CLIENT_IDs
 	for i := range services {
 		for j := range services[i].Integrations {
 			clientID := services[i].Integrations[j].ClientID
-			if resolveServiceName(clientID, nameMap) == "" {
-				// Try stripping common suffixes like "Client", "Integration"
+			if idx.Resolve(clientID) == "" {
 				lower := strings.ToLower(clientID)
 				for _, suffix := range []string{"client", "integration", "service"} {
 					trimmed := strings.TrimSuffix(lower, suffix)
 					if trimmed != lower {
-						if resolved := resolveServiceName(trimmed, nameMap); resolved != "" {
+						if resolved := idx.Resolve(trimmed); resolved != "" {
 							services[i].Integrations[j].ClientID = resolved
 							break
 						}
@@ -136,11 +162,10 @@ func Scan(basePath string) ([]Service, error) {
 	}
 
 	// Build reverse index
-
 	reverseIndex := make(map[string][]string)
 	for i := range services {
 		for _, integ := range services[i].Integrations {
-			target := resolveServiceName(integ.ClientID, nameMap)
+			target := idx.Resolve(integ.ClientID)
 			if target != "" && target != services[i].Name {
 				reverseIndex[target] = appendUnique(reverseIndex[target], services[i].Name)
 			}
@@ -158,23 +183,19 @@ func Scan(basePath string) ([]Service, error) {
 		return services[i].Name < services[j].Name
 	})
 
-	return services, nil
+	return services, idx, nil
 }
 
-// buildNameMap creates a lookup from various client ID forms to the canonical service name.
-// Handles hyphenation, plurals, and common variations.
-func buildNameMap(serviceNames map[string]bool) map[string]string {
+// ── NameIndex ──────────────────────────────────────────────────────
+
+func NewNameIndex(serviceNames map[string]bool) *NameIndex {
 	m := make(map[string]string)
 	for name := range serviceNames {
-		// Exact match
 		m[name] = name
-		// Hyphen-stripped: "case-data" -> "casedata"
 		stripped := strings.ReplaceAll(name, "-", "")
 		m[stripped] = name
-		// Dot-separated: "case-data" -> "case.data"
 		dotted := strings.ReplaceAll(name, "-", ".")
 		m[dotted] = name
-		// Singular/plural: "relations" <-> "relation"
 		if strings.HasSuffix(name, "s") {
 			m[strings.TrimSuffix(name, "s")] = name
 			m[strings.TrimSuffix(stripped, "s")] = name
@@ -183,28 +204,42 @@ func buildNameMap(serviceNames map[string]bool) map[string]string {
 			m[stripped+"s"] = name
 		}
 	}
-	return m
+	return &NameIndex{nameMap: m}
 }
 
-func resolveServiceName(clientID string, nameMap map[string]string) string {
+// NewNameIndexFromServices builds a NameIndex from a slice of services.
+func NewNameIndexFromServices(services []Service) *NameIndex {
+	names := make(map[string]bool, len(services))
+	for _, s := range services {
+		names[s.Name] = true
+	}
+	return NewNameIndex(names)
+}
+
+func (idx *NameIndex) Resolve(clientID string) string {
 	lower := strings.ToLower(clientID)
-	if name, ok := nameMap[lower]; ok {
+	if name, ok := idx.nameMap[lower]; ok {
 		return name
 	}
 	stripped := strings.ReplaceAll(lower, "-", "")
-	if name, ok := nameMap[stripped]; ok {
+	if name, ok := idx.nameMap[stripped]; ok {
 		return name
 	}
 	return ""
 }
 
+func (idx *NameIndex) IsInternal(clientID string) bool {
+	return idx.Resolve(clientID) != ""
+}
+
+// ── Repo scanning ──────────────────────────────────────────────────
+
 func scanRepo(repoPath string) []Integration {
 	integrationBase := filepath.Join(repoPath, "src", "main", "java")
 
-	// Track which integration packages we've found, and which have CLIENT_IDs
-	allPackages := make(map[string]bool)    // all integration sub-packages seen
-	resolvedPkgs := make(map[string]bool)   // packages that had a CLIENT_ID/INTEGRATION_NAME
-	seen := make(map[string]bool)           // dedup CLIENT_IDs
+	allPackages := make(map[string]bool)
+	resolvedPkgs := make(map[string]bool)
+	seen := make(map[string]bool)
 	var integrations []Integration
 
 	err := filepath.Walk(integrationBase, func(path string, info os.FileInfo, err error) error {
@@ -217,7 +252,6 @@ func scanRepo(repoPath string) []Integration {
 			return nil
 		}
 
-		// Skip db integration packages
 		parts := strings.Split(rel, string(filepath.Separator))
 		for _, p := range parts {
 			if p == "db" {
@@ -225,7 +259,6 @@ func scanRepo(repoPath string) []Integration {
 			}
 		}
 
-		// Record the integration sub-package name (skip files directly in integration/)
 		pkg := extractPackageName(rel)
 		if pkg != "" && !strings.HasSuffix(pkg, ".java") {
 			allPackages[pkg] = true
@@ -237,7 +270,6 @@ func scanRepo(repoPath string) []Integration {
 		}
 		content := string(data)
 
-		// Extract CLIENT_ID
 		if matches := clientIDRegex.FindStringSubmatch(content); len(matches) > 1 {
 			addIntegration(&integrations, seen, matches[1])
 			if pkg != "" {
@@ -245,7 +277,6 @@ func scanRepo(repoPath string) []Integration {
 			}
 		}
 
-		// Extract INTEGRATION_NAME
 		if matches := integrationNameRegex.FindStringSubmatch(content); len(matches) > 1 {
 			addIntegration(&integrations, seen, matches[1])
 			if pkg != "" {
@@ -259,7 +290,6 @@ func scanRepo(repoPath string) []Integration {
 		fmt.Fprintf(os.Stderr, "warning: error scanning %s: %v\n", repoPath, err)
 	}
 
-	// Fallback: integration packages with no CLIENT_ID get the package name as ID
 	for pkg := range allPackages {
 		if !resolvedPkgs[pkg] && !seen[pkg] {
 			seen[pkg] = true
@@ -274,8 +304,6 @@ func scanRepo(repoPath string) []Integration {
 	return integrations
 }
 
-// extractPackageName gets the integration sub-package name from the relative file path.
-// e.g. "se/sundsvall/foo/integration/casedata/configuration/Config.java" -> "casedata"
 func extractPackageName(relPath string) string {
 	parts := strings.Split(relPath, string(filepath.Separator))
 	for i, p := range parts {
@@ -293,42 +321,42 @@ func addIntegration(integrations *[]Integration, seen map[string]bool, clientID 
 	}
 }
 
-// extractPomVersion reads the second <version> tag from pom.xml (the project version, not parent).
+// ── Version extraction (proper XML parsing) ────────────────────────
+
 func extractPomVersion(repoPath string) string {
 	data, err := os.ReadFile(filepath.Join(repoPath, "pom.xml"))
 	if err != nil {
 		return ""
 	}
-	matches := pomVersionRegex.FindAllStringSubmatch(string(data), 3)
-	if len(matches) >= 2 {
-		v := strings.TrimSpace(matches[1][1])
-		if v != "@project.version@" {
-			return v
-		}
+
+	var pom pomProject
+	if err := xml.Unmarshal(data, &pom); err != nil {
+		return ""
 	}
-	return ""
+
+	v := strings.TrimSpace(pom.Version)
+	if v == "" || v == "@project.version@" {
+		return ""
+	}
+	return v
 }
 
-// matchSpecVersions finds integration spec files referenced in pom.xml, reads their
-// info.version, and matches them to existing integrations.
+// ── Spec version matching ──────────────────────────────────────────
+
 func matchSpecVersions(repoPath string, integrations []Integration) {
-	pomData, err := os.ReadFile(filepath.Join(repoPath, "pom.xml"))
+	data, err := os.ReadFile(filepath.Join(repoPath, "pom.xml"))
 	if err != nil {
 		return
 	}
 
-	// Find all inputSpec filenames from pom.xml
-	specMatches := inputSpecRegex.FindAllStringSubmatch(string(pomData), -1)
-	if len(specMatches) == 0 {
+	// Extract inputSpec paths from pom.xml using XML parsing
+	specFiles := extractInputSpecs(data)
+	if len(specFiles) == 0 {
 		return
 	}
 
-	// Build a map: normalized spec filename -> spec version
 	specVersions := make(map[string]string)
-	for _, m := range specMatches {
-		specFilename := m[1]
-
-		// Find the actual file — search common spec directories
+	for _, specFilename := range specFiles {
 		specPath := findSpecFile(repoPath, specFilename)
 		if specPath == "" {
 			continue
@@ -339,12 +367,10 @@ func matchSpecVersions(repoPath string, integrations []Integration) {
 			continue
 		}
 
-		// Normalize the filename to match against CLIENT_IDs
 		normalized := normalizeSpecFilename(specFilename)
 		specVersions[normalized] = version
 	}
 
-	// Match spec versions to integrations
 	for i := range integrations {
 		normalizedID := strings.ToLower(strings.ReplaceAll(integrations[i].ClientID, "-", ""))
 		for specName, version := range specVersions {
@@ -356,7 +382,35 @@ func matchSpecVersions(repoPath string, integrations []Integration) {
 	}
 }
 
-// findSpecFile locates a spec file by searching common directories.
+// extractInputSpecs pulls inputSpec filenames from pom.xml via XML parsing.
+// Falls back to regex if XML structure doesn't match (some poms use profiles/pluginManagement).
+func extractInputSpecs(pomData []byte) []string {
+	var pom pomProject
+	if err := xml.Unmarshal(pomData, &pom); err == nil && pom.Build != nil {
+		var specs []string
+		for _, plugin := range pom.Build.Plugins.Plugins {
+			for _, exec := range plugin.Executions.Executions {
+				if spec := exec.Configuration.InputSpec; spec != "" {
+					// Extract just the filename
+					specs = append(specs, filepath.Base(spec))
+				}
+			}
+		}
+		if len(specs) > 0 {
+			return specs
+		}
+	}
+
+	// Fallback: regex for poms with non-standard structure
+	re := regexp.MustCompile(`<inputSpec>[^<]*?([^/<]+\.ya?ml)</inputSpec>`)
+	matches := re.FindAllStringSubmatch(string(pomData), -1)
+	var specs []string
+	for _, m := range matches {
+		specs = append(specs, m[1])
+	}
+	return specs
+}
+
 func findSpecFile(repoPath, filename string) string {
 	dirs := []string{
 		"src/main/resources/integrations",
@@ -372,30 +426,26 @@ func findSpecFile(repoPath, filename string) string {
 	return ""
 }
 
-// extractSpecVersion reads the info.version from a YAML spec file.
-// Only matches version lines indented under the info block (indented, before paths:).
+// extractSpecVersion reads info.version from an OpenAPI spec YAML header.
+// Only reads first 15 lines to stay fast.
 func extractSpecVersion(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 
-	// Only search within the first 15 lines (the info block)
 	lines := strings.SplitN(string(data), "\n", 16)
+	re := regexp.MustCompile(`(?m)^\s+version:\s*["']?([^"'\n\r]+)["']?\s*$`)
 	header := strings.Join(lines, "\n")
 
-	if m := specVersionRegex.FindStringSubmatch(header); len(m) > 1 {
+	if m := re.FindStringSubmatch(header); len(m) > 1 {
 		return strings.TrimSpace(m[1])
 	}
 	return ""
 }
 
-// normalizeSpecFilename strips extension, -api suffix, and version suffixes,
-// then lowercases and removes hyphens.
 func normalizeSpecFilename(filename string) string {
-	// Strip extension and known suffixes
 	name := specFileCleanRegex.ReplaceAllString(filename, "")
-	// Strip "api-" prefix (e.g. "api-access-mapper.yaml")
 	name = strings.TrimPrefix(name, "api-")
 	return strings.ToLower(strings.ReplaceAll(name, "-", ""))
 }
@@ -409,7 +459,8 @@ func appendUnique(slice []string, val string) []string {
 	return append(slice, val)
 }
 
-// FindService returns the service with the given name, or nil.
+// ── Public helpers (use NameIndex) ─────────────────────────────────
+
 func FindService(name string, services []Service) *Service {
 	for i := range services {
 		if services[i].Name == name {
@@ -419,32 +470,13 @@ func FindService(name string, services []Service) *Service {
 	return nil
 }
 
-// ResolveTargetName returns the canonical service name for a CLIENT_ID, or "".
-func ResolveTargetName(clientID string, services []Service) string {
-	nameMap := make(map[string]string)
-	for _, s := range services {
-		nameMap[s.Name] = s.Name
-		nameMap[strings.ReplaceAll(s.Name, "-", "")] = s.Name
-		stripped := strings.ReplaceAll(s.Name, "-", "")
-		if strings.HasSuffix(s.Name, "s") {
-			nameMap[strings.TrimSuffix(s.Name, "s")] = s.Name
-			nameMap[strings.TrimSuffix(stripped, "s")] = s.Name
-		} else {
-			nameMap[s.Name+"s"] = s.Name
-			nameMap[stripped+"s"] = s.Name
-		}
-	}
-	return resolveServiceName(clientID, nameMap)
-}
-
-// StaleCount returns the number of integrations with a version mismatch.
-func StaleCount(svc *Service, services []Service) int {
+func StaleCount(svc *Service, services []Service, idx *NameIndex) int {
 	count := 0
 	for _, integ := range svc.Integrations {
 		if integ.SpecVersion == "" {
 			continue
 		}
-		targetName := ResolveTargetName(integ.ClientID, services)
+		targetName := idx.Resolve(integ.ClientID)
 		if targetName == "" {
 			continue
 		}
@@ -457,23 +489,4 @@ func StaleCount(svc *Service, services []Service) int {
 		}
 	}
 	return count
-}
-
-// IsInternal checks if a CLIENT_ID maps to a known internal service.
-func IsInternal(clientID string, services []Service) bool {
-	nameMap := make(map[string]string)
-	for _, s := range services {
-		nameMap[s.Name] = s.Name
-		nameMap[strings.ReplaceAll(s.Name, "-", "")] = s.Name
-		// Also add singular/plural
-		stripped := strings.ReplaceAll(s.Name, "-", "")
-		if strings.HasSuffix(s.Name, "s") {
-			nameMap[strings.TrimSuffix(s.Name, "s")] = s.Name
-			nameMap[strings.TrimSuffix(stripped, "s")] = s.Name
-		} else {
-			nameMap[s.Name+"s"] = s.Name
-			nameMap[stripped+"s"] = s.Name
-		}
-	}
-	return resolveServiceName(clientID, nameMap) != ""
 }
