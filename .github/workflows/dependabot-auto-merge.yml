@@ -17,10 +17,10 @@ jobs:
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.APPROVE_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHEEZI_DEPENDABOT_REVIEWER_TOKEN }}
 
       - name: Enable auto-merge
         run: gh pr merge --auto --merge "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.APPROVE_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHEEZI_DEPENDABOT_REVIEWER_TOKEN }}
