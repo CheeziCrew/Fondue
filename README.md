@@ -4,6 +4,15 @@
 
 Melt through your microservice dependencies. Interactive TUI for scanning Maven-based Java services, extracting integration configs, and visualizing the dependency graph.
 
+## Status
+
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=alert_status)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=security_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=vulnerabilities)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=CheeziCrew_Fondue&metric=bugs)](https://sonarcloud.io/summary/overall?id=CheeziCrew_Fondue)
+
 ## Features
 
 - **Interactive TUI** — browse services, drill into dependencies, fuzzy search
