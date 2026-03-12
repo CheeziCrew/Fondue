@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestLoadConfigFrom_Defaults(t *testing.T) {
+func TestLoadConfigFromDefaults(t *testing.T) {
 	cfg := LoadConfigFrom("/nonexistent")
 
 	if len(cfg.RepoPrefixes) != 2 {
@@ -17,7 +17,7 @@ func TestLoadConfigFrom_Defaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFrom_CustomFile(t *testing.T) {
+func TestLoadConfigFromCustomFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfgJSON := `{
@@ -43,7 +43,7 @@ func TestLoadConfigFrom_CustomFile(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFrom_PartialOverride(t *testing.T) {
+func TestLoadConfigFromPartialOverride(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Only override prefixes, keep defaults for the rest

@@ -86,35 +86,76 @@ type staleEntry struct {
 	targetVer   string
 }
 
-func renderStaleOverview(services []scanner.Service, idx *scanner.NameIndex) string {
+func collectStaleEntries(services []scanner.Service, idx *scanner.NameIndex) []staleEntry {
 	var entries []staleEntry
-
 	for _, svc := range services {
-		for _, integ := range svc.Integrations {
-			if integ.SpecVersion == "" {
-				continue
-			}
-			targetName := idx.Resolve(integ.ClientID)
-			if targetName == "" {
-				continue
-			}
-			target := scanner.FindService(targetName, services)
-			if target == nil || target.Version == "" {
-				continue
-			}
-			if integ.SpecVersion != target.Version {
-				entries = append(entries, staleEntry{
-					repo:        svc.Name,
-					specFile:    integ.ClientID,
-					specVersion: integ.SpecVersion,
-					targetVer:   target.Version,
-				})
-			}
+		entries = append(entries, collectServiceStaleEntries(svc, services, idx)...)
+	}
+	return entries
+}
+
+func collectServiceStaleEntries(svc scanner.Service, services []scanner.Service, idx *scanner.NameIndex) []staleEntry {
+	var entries []staleEntry
+	for _, integ := range svc.Integrations {
+		if integ.SpecVersion == "" {
+			continue
+		}
+		targetName := idx.Resolve(integ.ClientID)
+		if targetName == "" {
+			continue
+		}
+		target := scanner.FindService(targetName, services)
+		if target == nil || target.Version == "" {
+			continue
+		}
+		if integ.SpecVersion != target.Version {
+			entries = append(entries, staleEntry{
+				repo:        svc.Name,
+				specFile:    integ.ClientID,
+				specVersion: integ.SpecVersion,
+				targetVer:   target.Version,
+			})
 		}
 	}
+	return entries
+}
+
+func groupByRepo(entries []staleEntry) (map[string][]staleEntry, []string) {
+	byRepo := make(map[string][]staleEntry)
+	var repoOrder []string
+	for _, e := range entries {
+		if _, seen := byRepo[e.repo]; !seen {
+			repoOrder = append(repoOrder, e.repo)
+		}
+		byRepo[e.repo] = append(byRepo[e.repo], e)
+	}
+	return byRepo, repoOrder
+}
+
+func renderStaleRepoGroup(repo string, entries []staleEntry) string {
+	var s strings.Builder
+	unresolvedStyle := lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+
+	s.WriteString("  " + internalStyle.Render(repo) + "\n")
+	for _, e := range entries {
+		specVer := staleStyle.Render(e.specVersion)
+		if isUnresolvedPlaceholder(e.specVersion) {
+			specVer = unresolvedStyle.Render("unresolved")
+		}
+		s.WriteString(fmt.Sprintf("    %s  %s → %s\n",
+			dimStyle.Render(e.specFile),
+			specVer,
+			lipgloss.NewStyle().Foreground(colorGreen).Render(e.targetVer),
+		))
+	}
+	s.WriteString("\n")
+	return s.String()
+}
+
+func renderStaleOverview(services []scanner.Service, idx *scanner.NameIndex) string {
+	entries := collectStaleEntries(services, idx)
 
 	var s strings.Builder
-
 	s.WriteString(detailTitleStyle.Render("  ⚠️  Stale Integration Specs") + "\n\n")
 
 	if len(entries) == 0 {
@@ -125,32 +166,9 @@ func renderStaleOverview(services []scanner.Service, idx *scanner.NameIndex) str
 	countStyle := lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 	s.WriteString("  " + countStyle.Render(fmt.Sprintf("%d", len(entries))) + " stale spec(s) found\n\n")
 
-	// Group by repo
-	byRepo := make(map[string][]staleEntry)
-	var repoOrder []string
-	for _, e := range entries {
-		if _, seen := byRepo[e.repo]; !seen {
-			repoOrder = append(repoOrder, e.repo)
-		}
-		byRepo[e.repo] = append(byRepo[e.repo], e)
-	}
-
-	unresolvedStyle := lipgloss.NewStyle().Foreground(colorRed).Bold(true)
-
+	byRepo, repoOrder := groupByRepo(entries)
 	for _, repo := range repoOrder {
-		s.WriteString("  " + internalStyle.Render(repo) + "\n")
-		for _, e := range byRepo[repo] {
-			specVer := staleStyle.Render(e.specVersion)
-			if isUnresolvedPlaceholder(e.specVersion) {
-				specVer = unresolvedStyle.Render("unresolved")
-			}
-			s.WriteString(fmt.Sprintf("    %s  %s → %s\n",
-				dimStyle.Render(e.specFile),
-				specVer,
-				lipgloss.NewStyle().Foreground(colorGreen).Render(e.targetVer),
-			))
-		}
-		s.WriteString("\n")
+		s.WriteString(renderStaleRepoGroup(repo, byRepo[repo]))
 	}
 
 	return s.String()

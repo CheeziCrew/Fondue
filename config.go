@@ -50,7 +50,7 @@ func tryLoadConfig(path string) (Config, bool) {
 	}
 
 	cfg := defaultConfig // start with defaults so missing fields keep defaults
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if json.Unmarshal(data, &cfg) != nil {
 		return Config{}, false
 	}
 	return cfg, true

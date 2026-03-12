@@ -6,21 +6,26 @@ import (
 	"testing"
 )
 
+const (
+	testCaseData = "case-data"
+	testPomXML   = "pom.xml"
+)
+
 // ── NameIndex tests ─────────────────────────────────────────────────
 
-func TestNameIndex_ExactMatch(t *testing.T) {
-	idx := NewNameIndex(map[string]bool{"party": true, "case-data": true})
+func TestNameIndexExactMatch(t *testing.T) {
+	idx := NewNameIndex(map[string]bool{"party": true, testCaseData: true})
 
 	tests := []struct {
 		input string
 		want  string
 	}{
 		{"party", "party"},
-		{"case-data", "case-data"},
-		{"casedata", "case-data"},      // hyphen stripped
-		{"case.data", "case-data"},     // dot variant
+		{testCaseData, testCaseData},
+		{"casedata", testCaseData},      // hyphen stripped
+		{"case.data", testCaseData},     // dot variant
 		{"Party", "party"},             // case insensitive
-		{"CASEDATA", "case-data"},      // uppercase + stripped
+		{"CASEDATA", testCaseData},      // uppercase + stripped
 		{"nonexistent", ""},            // no match
 	}
 
@@ -32,7 +37,7 @@ func TestNameIndex_ExactMatch(t *testing.T) {
 	}
 }
 
-func TestNameIndex_PluralSingular(t *testing.T) {
+func TestNameIndexPluralSingular(t *testing.T) {
 	idx := NewNameIndex(map[string]bool{
 		"relations": true,
 		"party":     true,
@@ -56,7 +61,7 @@ func TestNameIndex_PluralSingular(t *testing.T) {
 	}
 }
 
-func TestNameIndex_IsInternal(t *testing.T) {
+func TestNameIndexIsInternal(t *testing.T) {
 	idx := NewNameIndex(map[string]bool{"party": true})
 
 	if !idx.IsInternal("party") {
@@ -124,7 +129,7 @@ func TestExtractPomVersion(t *testing.T) {
     <version>2.1.0</version>
 </project>`
 
-	os.WriteFile(filepath.Join(tmpDir, "pom.xml"), []byte(pom), 0644)
+	os.WriteFile(filepath.Join(tmpDir, testPomXML), []byte(pom), 0644)
 
 	got := extractPomVersion(tmpDir)
 	if got != "2.1.0" {
@@ -132,7 +137,7 @@ func TestExtractPomVersion(t *testing.T) {
 	}
 }
 
-func TestExtractPomVersion_PlaceholderSkipped(t *testing.T) {
+func TestExtractPomVersionPlaceholderSkipped(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	pom := `<?xml version="1.0" encoding="UTF-8"?>
@@ -140,7 +145,7 @@ func TestExtractPomVersion_PlaceholderSkipped(t *testing.T) {
     <version>@project.version@</version>
 </project>`
 
-	os.WriteFile(filepath.Join(tmpDir, "pom.xml"), []byte(pom), 0644)
+	os.WriteFile(filepath.Join(tmpDir, testPomXML), []byte(pom), 0644)
 
 	got := extractPomVersion(tmpDir)
 	if got != "" {
@@ -168,7 +173,7 @@ paths:`
 	}
 }
 
-func TestExtractSpecVersion_Quoted(t *testing.T) {
+func TestExtractSpecVersionQuoted(t *testing.T) {
 	tmpDir := t.TempDir()
 	specFile := filepath.Join(tmpDir, "api.yaml")
 
@@ -212,7 +217,7 @@ func TestStaleCount(t *testing.T) {
 
 // ── Full scan integration test ──────────────────────────────────────
 
-func TestScan_EmptyDir(t *testing.T) {
+func TestScanEmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := ScanConfig{
@@ -232,7 +237,7 @@ func TestScan_EmptyDir(t *testing.T) {
 	}
 }
 
-func TestScan_WithService(t *testing.T) {
+func TestScanWithService(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a minimal service structure
@@ -252,7 +257,7 @@ public class Config {
 <project>
     <version>1.0.0</version>
 </project>`
-	os.WriteFile(filepath.Join(svcDir, "pom.xml"), []byte(pom), 0644)
+	os.WriteFile(filepath.Join(svcDir, testPomXML), []byte(pom), 0644)
 
 	cfg := ScanConfig{
 		RepoPrefixes:    []string{"api-service-"},

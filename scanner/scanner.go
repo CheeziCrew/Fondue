@@ -44,9 +44,9 @@ var (
 // ── XML structs for proper pom.xml parsing ──────────────────────────
 
 type pomProject struct {
-	XMLName xml.Name   `xml:"project"`
-	Version string     `xml:"version"`
-	Build   *pomBuild  `xml:"build"`
+	XMLName xml.Name  `xml:"project"`
+	Version string    `xml:"version"`
+	Build   *pomBuild `xml:"build"`
 }
 
 type pomBuild struct {
@@ -82,86 +82,99 @@ func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 	services := make([]Service, 0, 80)
 	serviceNames := make(map[string]bool)
 
-	// Scan prefixed repos
-	for _, prefix := range cfg.RepoPrefixes {
+	services, err = scanPrefixedRepos(basePath, cfg.RepoPrefixes, services, serviceNames)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	services = scanStandaloneRepos(basePath, cfg.StandaloneRepos, services, serviceNames)
+
+	idx := NewNameIndex(serviceNames)
+	normalizeClientIDs(services, idx)
+	applyReverseIndex(services, idx)
+
+	sort.Slice(services, func(i, j int) bool {
+		return services[i].Name < services[j].Name
+	})
+
+	return services, idx, nil
+}
+
+func scanPrefixedRepos(basePath string, prefixes []string, services []Service, serviceNames map[string]bool) ([]Service, error) {
+	for _, prefix := range prefixes {
 		dirs, err := filepath.Glob(filepath.Join(basePath, prefix+"*"))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-
 		for _, dir := range dirs {
-			info, err := os.Stat(dir)
-			if err != nil || !info.IsDir() {
-				continue
+			svc, ok := tryBuildService(dir, strings.TrimPrefix(filepath.Base(dir), prefix), serviceNames)
+			if ok {
+				services = append(services, svc)
 			}
+		}
+	}
+	return services, nil
+}
 
-			if _, err := os.Stat(filepath.Join(dir, "src", "main", "java")); err != nil {
-				continue
-			}
-
-			name := strings.TrimPrefix(filepath.Base(dir), prefix)
-			if serviceNames[name] {
-				continue
-			}
-			serviceNames[name] = true
-
-			integrations := scanRepo(dir)
-			matchSpecVersions(dir, integrations)
-			svc := Service{
-				Name:         name,
-				Path:         dir,
-				Version:      extractPomVersion(dir),
-				Integrations: integrations,
-			}
+func scanStandaloneRepos(basePath string, repos map[string]string, services []Service, serviceNames map[string]bool) []Service {
+	for dirName, serviceName := range repos {
+		dir := filepath.Join(basePath, dirName)
+		svc, ok := tryBuildService(dir, serviceName, serviceNames)
+		if ok {
 			services = append(services, svc)
 		}
 	}
+	return services
+}
 
-	// Scan standalone repos
-	for dirName, serviceName := range cfg.StandaloneRepos {
-		dir := filepath.Join(basePath, dirName)
-		if _, err := os.Stat(filepath.Join(dir, "src", "main", "java")); err != nil {
-			continue
-		}
-		if serviceNames[serviceName] {
-			continue
-		}
-		serviceNames[serviceName] = true
-
-		integrations := scanRepo(dir)
-		matchSpecVersions(dir, integrations)
-		svc := Service{
-			Name:         serviceName,
-			Path:         dir,
-			Version:      extractPomVersion(dir),
-			Integrations: integrations,
-		}
-		services = append(services, svc)
+func tryBuildService(dir, name string, serviceNames map[string]bool) (Service, bool) {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return Service{}, false
 	}
+	if _, err := os.Stat(filepath.Join(dir, "src", "main", "java")); err != nil {
+		return Service{}, false
+	}
+	if serviceNames[name] {
+		return Service{}, false
+	}
+	serviceNames[name] = true
 
-	// Build name index once
-	idx := NewNameIndex(serviceNames)
+	integrations := scanRepo(dir)
+	matchSpecVersions(dir, integrations)
+	return Service{
+		Name:         name,
+		Path:         dir,
+		Version:      extractPomVersion(dir),
+		Integrations: integrations,
+	}, true
+}
 
-	// Normalize CLIENT_IDs
+func normalizeClientIDs(services []Service, idx *NameIndex) {
 	for i := range services {
 		for j := range services[i].Integrations {
-			clientID := services[i].Integrations[j].ClientID
-			if idx.Resolve(clientID) == "" {
-				lower := strings.ToLower(clientID)
-				for _, suffix := range []string{"client", "integration", "service"} {
-					trimmed := strings.TrimSuffix(lower, suffix)
-					if trimmed != lower {
-						if resolved := idx.Resolve(trimmed); resolved != "" {
-							services[i].Integrations[j].ClientID = resolved
-							break
-						}
-					}
-				}
+			normalizeClientID(&services[i].Integrations[j], idx)
+		}
+	}
+}
+
+func normalizeClientID(integ *Integration, idx *NameIndex) {
+	if idx.Resolve(integ.ClientID) != "" {
+		return
+	}
+	lower := strings.ToLower(integ.ClientID)
+	for _, suffix := range []string{"client", "integration", "service"} {
+		trimmed := strings.TrimSuffix(lower, suffix)
+		if trimmed != lower {
+			if resolved := idx.Resolve(trimmed); resolved != "" {
+				integ.ClientID = resolved
+				return
 			}
 		}
 	}
+}
 
-	// Build reverse index
+func applyReverseIndex(services []Service, idx *NameIndex) {
 	reverseIndex := make(map[string][]string)
 	for i := range services {
 		for _, integ := range services[i].Integrations {
@@ -178,12 +191,6 @@ func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 			services[i].DependedOnBy = deps
 		}
 	}
-
-	sort.Slice(services, func(i, j int) bool {
-		return services[i].Name < services[j].Name
-	})
-
-	return services, idx, nil
 }
 
 // ── NameIndex ──────────────────────────────────────────────────────
@@ -234,74 +241,96 @@ func (idx *NameIndex) IsInternal(clientID string) bool {
 
 // ── Repo scanning ──────────────────────────────────────────────────
 
+type walkState struct {
+	allPackages  map[string]bool
+	resolvedPkgs map[string]bool
+	seen         map[string]bool
+	integrations []Integration
+}
+
 func scanRepo(repoPath string) []Integration {
 	integrationBase := filepath.Join(repoPath, "src", "main", "java")
 
-	allPackages := make(map[string]bool)
-	resolvedPkgs := make(map[string]bool)
-	seen := make(map[string]bool)
-	var integrations []Integration
+	ws := &walkState{
+		allPackages:  make(map[string]bool),
+		resolvedPkgs: make(map[string]bool),
+		seen:         make(map[string]bool),
+	}
 
 	err := filepath.Walk(integrationBase, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".java") {
 			return nil
 		}
-
-		rel, _ := filepath.Rel(integrationBase, path)
-		if !strings.Contains(rel, "integration") {
-			return nil
-		}
-
-		parts := strings.Split(rel, string(filepath.Separator))
-		for _, p := range parts {
-			if p == "db" {
-				return nil
-			}
-		}
-
-		pkg := extractPackageName(rel)
-		if pkg != "" && !strings.HasSuffix(pkg, ".java") {
-			allPackages[pkg] = true
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		content := string(data)
-
-		if matches := clientIDRegex.FindStringSubmatch(content); len(matches) > 1 {
-			addIntegration(&integrations, seen, matches[1])
-			if pkg != "" {
-				resolvedPkgs[pkg] = true
-			}
-		}
-
-		if matches := integrationNameRegex.FindStringSubmatch(content); len(matches) > 1 {
-			addIntegration(&integrations, seen, matches[1])
-			if pkg != "" {
-				resolvedPkgs[pkg] = true
-			}
-		}
-
-		return nil
+		return processJavaFile(path, integrationBase, ws)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: error scanning %s: %v\n", repoPath, err)
 	}
 
-	for pkg := range allPackages {
-		if !resolvedPkgs[pkg] && !seen[pkg] {
-			seen[pkg] = true
-			integrations = append(integrations, Integration{ClientID: pkg})
-		}
-	}
+	addUnresolvedPackages(ws)
 
-	sort.Slice(integrations, func(i, j int) bool {
-		return integrations[i].ClientID < integrations[j].ClientID
+	sort.Slice(ws.integrations, func(i, j int) bool {
+		return ws.integrations[i].ClientID < ws.integrations[j].ClientID
 	})
 
-	return integrations
+	return ws.integrations
+}
+
+func processJavaFile(path, integrationBase string, ws *walkState) error {
+	rel, _ := filepath.Rel(integrationBase, path)
+	if !strings.Contains(rel, "integration") {
+		return nil
+	}
+	if isDBPath(rel) {
+		return nil
+	}
+
+	pkg := extractPackageName(rel)
+	if pkg != "" && !strings.HasSuffix(pkg, ".java") {
+		ws.allPackages[pkg] = true
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	extractRegexMatches(string(data), pkg, ws)
+	return nil
+}
+
+func isDBPath(rel string) bool {
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, p := range parts {
+		if p == "db" {
+			return true
+		}
+	}
+	return false
+}
+
+func extractRegexMatches(content, pkg string, ws *walkState) {
+	if matches := clientIDRegex.FindStringSubmatch(content); len(matches) > 1 {
+		addIntegration(&ws.integrations, ws.seen, matches[1])
+		if pkg != "" {
+			ws.resolvedPkgs[pkg] = true
+		}
+	}
+	if matches := integrationNameRegex.FindStringSubmatch(content); len(matches) > 1 {
+		addIntegration(&ws.integrations, ws.seen, matches[1])
+		if pkg != "" {
+			ws.resolvedPkgs[pkg] = true
+		}
+	}
+}
+
+func addUnresolvedPackages(ws *walkState) {
+	for pkg := range ws.allPackages {
+		if !ws.resolvedPkgs[pkg] && !ws.seen[pkg] {
+			ws.seen[pkg] = true
+			ws.integrations = append(ws.integrations, Integration{ClientID: pkg})
+		}
+	}
 }
 
 func extractPackageName(relPath string) string {
@@ -330,15 +359,14 @@ func extractPomVersion(repoPath string) string {
 	}
 
 	var pom pomProject
-	if err := xml.Unmarshal(data, &pom); err != nil {
+	if xml.Unmarshal(data, &pom) != nil {
 		return ""
 	}
 
-	v := strings.TrimSpace(pom.Version)
-	if v == "" || v == "@project.version@" {
-		return ""
+	if v := strings.TrimSpace(pom.Version); v != "" && v != "@project.version@" {
+		return v
 	}
-	return v
+	return ""
 }
 
 // ── Spec version matching ──────────────────────────────────────────

@@ -29,17 +29,25 @@ func HeatColor(t float64) string {
 	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
 }
 
-// WriteDOT writes a Graphviz DOT representation of the service graph to w.
-// If highlight is non-empty, that service node gets a distinct border.
-func WriteDOT(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, highlight string) {
-	maxDeps := 0
+func maxDepCount(services []scanner.Service) int {
+	m := 0
 	for _, svc := range services {
-		total := len(svc.DependedOnBy) + len(svc.Integrations)
-		if total > maxDeps {
-			maxDeps = total
+		if total := len(svc.DependedOnBy) + len(svc.Integrations); total > m {
+			m = total
 		}
 	}
+	return m
+}
 
+func heatIntensity(svc scanner.Service, maxDeps int) float64 {
+	if maxDeps == 0 {
+		return 0
+	}
+	total := len(svc.DependedOnBy) + len(svc.Integrations)
+	return float64(total) / float64(maxDeps)
+}
+
+func writeDOTHeader(w io.Writer) {
 	fmt.Fprintln(w, "digraph services {")
 	fmt.Fprintln(w, "  bgcolor=\"#1a1b26\";")
 	fmt.Fprintln(w, "  rankdir=LR;")
@@ -51,23 +59,16 @@ func WriteDOT(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, h
 	fmt.Fprintln(w, "  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\", fontsize=11, fontcolor=\"#c0caf5\", color=\"#3b4261\", fillcolor=\"#24283b\", penwidth=1.5];")
 	fmt.Fprintln(w, "  edge [color=\"#3b4261\", arrowsize=0.7, penwidth=1.2];")
 	fmt.Fprintln(w)
+}
 
+func writeDOTNodes(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, maxDeps int, highlight string) {
 	for _, svc := range services {
-		label := svc.Name
-		if svc.Version != "" {
-			label += "\\n" + svc.Version
-		}
-		total := len(svc.DependedOnBy) + len(svc.Integrations)
-		t := 0.0
-		if maxDeps > 0 {
-			t = float64(total) / float64(maxDeps)
-		}
+		label := buildNodeLabel(svc, services, idx)
+		t := heatIntensity(svc, maxDeps)
 		color := HeatColor(t)
 		fill := "#24283b"
-		stale := scanner.StaleCount(&svc, services, idx)
-		if stale > 0 {
+		if scanner.StaleCount(&svc, services, idx) > 0 {
 			fill = "#2d1f2f"
-			label += fmt.Sprintf("\\n⚠ %d stale", stale)
 		}
 		pw := 1.5 + t*2.5
 		if highlight != "" && svc.Name == highlight {
@@ -76,59 +77,104 @@ func WriteDOT(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, h
 		}
 		fmt.Fprintf(w, "  \"%s\" [label=\"%s\", color=\"%s\", fillcolor=\"%s\", penwidth=%.1f];\n", svc.Name, label, color, fill, pw)
 	}
+}
 
+func buildNodeLabel(svc scanner.Service, services []scanner.Service, idx *scanner.NameIndex) string {
+	label := svc.Name
+	if svc.Version != "" {
+		label += "\\n" + svc.Version
+	}
+	if stale := scanner.StaleCount(&svc, services, idx); stale > 0 {
+		label += fmt.Sprintf("\\n⚠ %d stale", stale)
+	}
+	return label
+}
+
+func writeDOTEdges(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, maxDeps int) map[string]bool {
 	fmt.Fprintln(w)
-
 	externals := make(map[string]bool)
-
 	for _, svc := range services {
-		total := len(svc.DependedOnBy) + len(svc.Integrations)
-		t := 0.0
-		if maxDeps > 0 {
-			t = float64(total) / float64(maxDeps)
-		}
+		t := heatIntensity(svc, maxDeps)
 		edgeColor := HeatColor(t * 0.6)
-		for _, integ := range svc.Integrations {
-			target := idx.Resolve(integ.ClientID)
-			if target != "" {
-				fmt.Fprintf(w, "  \"%s\" -> \"%s\" [color=\"%s\"];\n", svc.Name, target, edgeColor)
-			} else {
-				extID := strings.ToLower(integ.ClientID)
-				externals[extID] = true
-				fmt.Fprintf(w, "  \"%s\" -> \"%s\" [color=\"%s\", style=dashed];\n", svc.Name, extID, edgeColor)
-			}
+		writeServiceEdges(w, svc, idx, edgeColor, externals)
+	}
+	return externals
+}
+
+func writeServiceEdges(w io.Writer, svc scanner.Service, idx *scanner.NameIndex, edgeColor string, externals map[string]bool) {
+	for _, integ := range svc.Integrations {
+		target := idx.Resolve(integ.ClientID)
+		if target != "" {
+			fmt.Fprintf(w, "  \"%s\" -> \"%s\" [color=\"%s\"];\n", svc.Name, target, edgeColor)
+		} else {
+			extID := strings.ToLower(integ.ClientID)
+			externals[extID] = true
+			fmt.Fprintf(w, "  \"%s\" -> \"%s\" [color=\"%s\", style=dashed];\n", svc.Name, extID, edgeColor)
 		}
 	}
+}
 
-	if len(externals) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "  subgraph cluster_external {")
-		fmt.Fprintln(w, "    style=dashed; color=\"#3b4261\"; fontcolor=\"#565f89\"; fontname=\"Helvetica\"; label=\"external\";")
-		for ext := range externals {
-			fmt.Fprintf(w, "    \"%s\" [style=\"rounded,dashed,filled\", fillcolor=\"#1a1b26\", color=\"#565f89\", fontcolor=\"#565f89\"];\n", ext)
-		}
-		fmt.Fprintln(w, "  }")
+func writeDOTExternals(w io.Writer, externals map[string]bool) {
+	if len(externals) == 0 {
+		return
 	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  subgraph cluster_external {")
+	fmt.Fprintln(w, "    style=dashed; color=\"#3b4261\"; fontcolor=\"#565f89\"; fontname=\"Helvetica\"; label=\"external\";")
+	for ext := range externals {
+		fmt.Fprintf(w, "    \"%s\" [style=\"rounded,dashed,filled\", fillcolor=\"#1a1b26\", color=\"#565f89\", fontcolor=\"#565f89\"];\n", ext)
+	}
+	fmt.Fprintln(w, "  }")
+}
 
+// WriteDOT writes a Graphviz DOT representation of the service graph to w.
+// If highlight is non-empty, that service node gets a distinct border.
+func WriteDOT(w io.Writer, services []scanner.Service, idx *scanner.NameIndex, highlight string) {
+	maxDeps := maxDepCount(services)
+	writeDOTHeader(w)
+	writeDOTNodes(w, services, idx, maxDeps, highlight)
+	externals := writeDOTEdges(w, services, idx, maxDeps)
+	writeDOTExternals(w, externals)
 	fmt.Fprintln(w, "}")
+}
+
+type bfsEntry struct {
+	name  string
+	depth int
+}
+
+func buildServiceIndex(services []scanner.Service) map[string]*scanner.Service {
+	byName := make(map[string]*scanner.Service)
+	for i := range services {
+		byName[services[i].Name] = &services[i]
+	}
+	return byName
+}
+
+func enqueueNeighbors(svc *scanner.Service, idx *scanner.NameIndex, depth int, visited map[string]bool) []bfsEntry {
+	var neighbors []bfsEntry
+	for _, integ := range svc.Integrations {
+		if target := idx.Resolve(integ.ClientID); target != "" && !visited[target] {
+			visited[target] = true
+			neighbors = append(neighbors, bfsEntry{target, depth})
+		}
+	}
+	for _, dep := range svc.DependedOnBy {
+		if !visited[dep] {
+			visited[dep] = true
+			neighbors = append(neighbors, bfsEntry{dep, depth})
+		}
+	}
+	return neighbors
 }
 
 // CollectSubgraph does a BFS from root, collecting all services within N hops
 // in both directions (outbound integrations + inbound dependents).
 func CollectSubgraph(root string, services []scanner.Service, idx *scanner.NameIndex, hops int) []scanner.Service {
-	type entry struct {
-		name  string
-		depth int
-	}
-
 	visited := make(map[string]bool)
 	visited[root] = true
-	queue := []entry{{root, 0}}
-
-	byName := make(map[string]*scanner.Service)
-	for i := range services {
-		byName[services[i].Name] = &services[i]
-	}
+	queue := []bfsEntry{{root, 0}}
+	byName := buildServiceIndex(services)
 
 	for len(queue) > 0 {
 		cur := queue[0]
@@ -143,20 +189,7 @@ func CollectSubgraph(root string, services []scanner.Service, idx *scanner.NameI
 			continue
 		}
 
-		for _, integ := range svc.Integrations {
-			target := idx.Resolve(integ.ClientID)
-			if target != "" && !visited[target] {
-				visited[target] = true
-				queue = append(queue, entry{target, cur.depth + 1})
-			}
-		}
-
-		for _, dep := range svc.DependedOnBy {
-			if !visited[dep] {
-				visited[dep] = true
-				queue = append(queue, entry{dep, cur.depth + 1})
-			}
-		}
+		queue = append(queue, enqueueNeighbors(svc, idx, cur.depth+1, visited)...)
 	}
 
 	var result []scanner.Service

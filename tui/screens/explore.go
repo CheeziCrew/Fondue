@@ -85,22 +85,8 @@ func (m ExploreModel) Update(msg tea.Msg) (ExploreModel, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "q":
-			if m.list.FilterState() != list.Filtering {
-				return m, func() tea.Msg { return BackToMenuMsg{} }
-			}
-		case "esc":
-			if m.view == exploreDetail {
-				if !m.popNav() {
-					m.view = exploreList
-					m.detailCursor = 0
-				}
-				return m, nil
-			}
-			if m.list.FilterState() != list.Filtering {
-				return m, func() tea.Msg { return BackToMenuMsg{} }
-			}
+		if m, cmd, handled := m.handleGlobalKey(msg); handled {
+			return m, cmd
 		}
 	}
 
@@ -112,6 +98,32 @@ func (m ExploreModel) Update(msg tea.Msg) (ExploreModel, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m ExploreModel) handleGlobalKey(msg tea.KeyPressMsg) (ExploreModel, tea.Cmd, bool) {
+	switch msg.String() {
+	case "q":
+		if m.list.FilterState() != list.Filtering {
+			return m, func() tea.Msg { return BackToMenuMsg{} }, true
+		}
+	case "esc":
+		return m.handleEscKey()
+	}
+	return m, nil, false
+}
+
+func (m ExploreModel) handleEscKey() (ExploreModel, tea.Cmd, bool) {
+	if m.view == exploreDetail {
+		if !m.popNav() {
+			m.view = exploreList
+			m.detailCursor = 0
+		}
+		return m, nil, true
+	}
+	if m.list.FilterState() != list.Filtering {
+		return m, func() tea.Msg { return BackToMenuMsg{} }, true
+	}
+	return m, nil, false
 }
 
 func (m ExploreModel) View() string {
@@ -166,65 +178,61 @@ func (d serviceDelegate) Height() int                             { return 3 }
 func (d serviceDelegate) Spacing() int                            { return 1 }
 func (d serviceDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
-func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	item, ok := listItem.(serviceItem)
-	if !ok {
-		return
-	}
+type delegateStyles struct {
+	name, outBadge, inBadge, isoBadge, border lipgloss.Style
+}
 
-	svc := item.service
-	out := len(svc.Integrations)
-	in := len(svc.DependedOnBy)
-	selected := index == m.Index()
-	width := m.Width()
-
-	var nameStyle, outBadge, inBadge, isoBadge lipgloss.Style
-	var border lipgloss.Style
-
-	if selected {
-		nameStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-		outBadge = lipgloss.NewStyle().Foreground(colorBg).Background(colorYellow).Bold(true).Padding(0, 1)
-		inBadge = lipgloss.NewStyle().Foreground(colorBg).Background(colorGreen).Bold(true).Padding(0, 1)
-		isoBadge = lipgloss.NewStyle().Foreground(colorDim).Italic(true)
-		border = lipgloss.NewStyle().
+func selectedDelegateStyles() delegateStyles {
+	return delegateStyles{
+		name:     lipgloss.NewStyle().Bold(true).Foreground(colorAccent),
+		outBadge: lipgloss.NewStyle().Foreground(colorBg).Background(colorYellow).Bold(true).Padding(0, 1),
+		inBadge:  lipgloss.NewStyle().Foreground(colorBg).Background(colorGreen).Bold(true).Padding(0, 1),
+		isoBadge: lipgloss.NewStyle().Foreground(colorDim).Italic(true),
+		border: lipgloss.NewStyle().
 			BorderLeft(true).
 			BorderStyle(lipgloss.ThickBorder()).
 			BorderForeground(colorAccent).
-			PaddingLeft(1)
-	} else {
-		nameStyle = lipgloss.NewStyle().Foreground(colorFg)
-		outBadge = lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
-		inBadge = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
-		isoBadge = lipgloss.NewStyle().Foreground(colorDim).Italic(true)
-		border = lipgloss.NewStyle().
+			PaddingLeft(1),
+	}
+}
+
+func unselectedDelegateStyles() delegateStyles {
+	return delegateStyles{
+		name:     lipgloss.NewStyle().Foreground(colorFg),
+		outBadge: lipgloss.NewStyle().Foreground(colorYellow).Bold(true),
+		inBadge:  lipgloss.NewStyle().Foreground(colorGreen).Bold(true),
+		isoBadge: lipgloss.NewStyle().Foreground(colorDim).Italic(true),
+		border: lipgloss.NewStyle().
 			BorderLeft(true).
 			BorderStyle(lipgloss.HiddenBorder()).
-			PaddingLeft(1)
+			PaddingLeft(1),
 	}
+}
 
-	name := nameStyle.Render(svc.Name)
+func renderBadges(svc scanner.Service, selected bool, ds delegateStyles, allSvc []scanner.Service, nameIdx *scanner.NameIndex) string {
+	out := len(svc.Integrations)
+	in := len(svc.DependedOnBy)
 
 	var badges string
 	if out > 0 {
+		label := fmt.Sprintf("↑ %d", out)
 		if selected {
-			badges += "  " + outBadge.Render(fmt.Sprintf("↑ %d out", out))
-		} else {
-			badges += "  " + outBadge.Render(fmt.Sprintf("↑ %d", out))
+			label = fmt.Sprintf("↑ %d out", out)
 		}
+		badges += "  " + ds.outBadge.Render(label)
 	}
 	if in > 0 {
+		label := fmt.Sprintf("↓ %d", in)
 		if selected {
-			badges += "  " + inBadge.Render(fmt.Sprintf("↓ %d in", in))
-		} else {
-			badges += "  " + inBadge.Render(fmt.Sprintf("↓ %d", in))
+			label = fmt.Sprintf("↓ %d in", in)
 		}
+		badges += "  " + ds.inBadge.Render(label)
 	}
 	if out == 0 && in == 0 {
-		badges = "  " + isoBadge.Render("○ isolated")
+		badges = "  " + ds.isoBadge.Render("○ isolated")
 	}
 
-	staleCount := scanner.StaleCount(&svc, allServices(m), d.nameIdx)
-	if staleCount > 0 {
+	if staleCount := scanner.StaleCount(&svc, allSvc, nameIdx); staleCount > 0 {
 		staleBadge := lipgloss.NewStyle().Foreground(colorYellow).Bold(true)
 		if selected {
 			staleBadge = lipgloss.NewStyle().Foreground(colorBg).Background(colorYellow).Bold(true).Padding(0, 1)
@@ -232,51 +240,58 @@ func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, listItem l
 		badges += "  " + staleBadge.Render(fmt.Sprintf("⚠ %d stale", staleCount))
 	}
 
-	line1 := name + badges
+	return badges
+}
 
-	const maxPreview = 70
-	var line2 string
-	if out > 0 {
-		arrow := lipgloss.NewStyle().Foreground(colorYellow).Render("→")
-		depColor := colorFg
-		if !selected {
-			depColor = colorDim
-		}
-		line2 = arrow + " " + renderDepList(svc.Integrations, nil, depColor, maxPreview)
+func renderDepPreviewLine(svc scanner.Service, selected bool, arrowColor color.Color, arrow string, integrations []scanner.Integration, names []string) string {
+	depColor := colorFg
+	if !selected {
+		depColor = colorDim
 	}
+	arrowStr := lipgloss.NewStyle().Foreground(arrowColor).Render(arrow)
+	return arrowStr + " " + renderDepList(integrations, names, depColor, 70)
+}
 
-	var line3 string
-	if in > 0 {
-		arrow := lipgloss.NewStyle().Foreground(colorGreen).Render("←")
-		depColor := colorFg
-		if !selected {
-			depColor = colorDim
-		}
-		line3 = arrow + " " + renderDepList(nil, svc.DependedOnBy, depColor, maxPreview)
-	}
-
-	lines := line1
-	if line2 != "" {
-		lines += "\n" + line2
-	}
-	if line3 != "" {
-		lines += "\n" + line3
-	}
-
-	lineCount := 1
-	if line2 != "" {
-		lineCount++
-	}
-	if line3 != "" {
-		lineCount++
-	}
-	for lineCount < 3 {
+func padLines(lines string, lineCount, target int) string {
+	for lineCount < target {
 		lines += "\n"
 		lineCount++
 	}
+	return lines
+}
 
-	rendered := border.Width(width - 4).Render(lines)
-	fmt.Fprint(w, rendered)
+func (d serviceDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(serviceItem)
+	if !ok {
+		return
+	}
+
+	svc := item.service
+	selected := index == m.Index()
+	width := m.Width()
+
+	ds := unselectedDelegateStyles()
+	if selected {
+		ds = selectedDelegateStyles()
+	}
+
+	allSvc := allServices(m)
+	line1 := ds.name.Render(svc.Name) + renderBadges(svc, selected, ds, allSvc, d.nameIdx)
+
+	lineCount := 1
+	lines := line1
+
+	if len(svc.Integrations) > 0 {
+		lines += "\n" + renderDepPreviewLine(svc, selected, colorYellow, "→", svc.Integrations, nil)
+		lineCount++
+	}
+	if len(svc.DependedOnBy) > 0 {
+		lines += "\n" + renderDepPreviewLine(svc, selected, colorGreen, "←", nil, svc.DependedOnBy)
+		lineCount++
+	}
+
+	lines = padLines(lines, lineCount, 3)
+	fmt.Fprint(w, ds.border.Width(width-4).Render(lines))
 }
 
 func renderDepList(integrations []scanner.Integration, names []string, c color.Color, maxWidth int) string {
@@ -383,39 +398,61 @@ func handleExploreListUpdate(m ExploreModel, msg tea.Msg) (ExploreModel, tea.Cmd
 
 // ── Detail view ─────────────────────────────────────────────────────
 
-func renderDetail(m ExploreModel) string {
-	svc := m.selectedService
-	if svc == nil {
-		return ""
-	}
-
-	contentWidth := m.width - 8
-	if contentWidth < 40 {
-		contentWidth = 40
-	}
-
-	var content strings.Builder
-
-	// Header
+func renderDetailHeader(svc *scanner.Service) string {
+	var s strings.Builder
 	title := svc.Name
 	if svc.Version != "" {
 		title += " · " + svc.Version
 	}
-	titleLine := detailTitleStyle.Render(fmt.Sprintf("  %s", title))
-	content.WriteString(titleLine + "\n")
-	content.WriteString(detailPathStyle.Render(svc.Path) + "\n")
+	s.WriteString(detailTitleStyle.Render(fmt.Sprintf("  %s", title)) + "\n")
+	s.WriteString(detailPathStyle.Render(svc.Path) + "\n")
 
-	// Stats bar
 	outCount := len(svc.Integrations)
 	inCount := len(svc.DependedOnBy)
 	statsLine := "  " +
 		badgeOutStyle.Render(fmt.Sprintf(" %d outbound", outCount)) +
 		"  " +
 		badgeInStyle.Render(fmt.Sprintf(" %d inbound", inCount))
-	content.WriteString(statsLine + "\n")
+	s.WriteString(statsLine + "\n")
+	return s.String()
+}
 
-	// Depends on
-	content.WriteString(
+func findNavIndex(integ scanner.Integration, navigable []scanner.Integration) int {
+	for i, n := range navigable {
+		if n.ClientID == integ.ClientID {
+			return i
+		}
+	}
+	return -1
+}
+
+func renderIntegrationLine(integ scanner.Integration, isInternal, isCursor bool, services []scanner.Service, nameIdx *scanner.NameIndex) string {
+	var prefix, line string
+	if isCursor {
+		prefix = "  " + cursorStyle.Render("") + " "
+		line = cursorStyle.Render(integ.ClientID)
+	} else if isInternal {
+		prefix = "  " + arrowOutStyle.Render("") + " "
+		line = internalStyle.Render(integ.ClientID)
+	} else {
+		prefix = "  " + dimStyle.Render("") + " "
+		line = externalStyle.Render(integ.ClientID)
+	}
+
+	if !isInternal {
+		line += " " + externalTagStyle.Render("ext")
+	}
+	if isInternal {
+		line += renderVersionAnnotation(integ, services, nameIdx)
+	}
+	return prefix + line + "\n"
+}
+
+func renderDetailOutbound(svc *scanner.Service, m ExploreModel) string {
+	var s strings.Builder
+	outCount := len(svc.Integrations)
+
+	s.WriteString(
 		sectionHeaderStyle.Render(
 			arrowOutStyle.Render("")+"  Depends on "+
 				sectionCountStyle.Render(fmt.Sprintf("(%d)", outCount)),
@@ -423,49 +460,38 @@ func renderDetail(m ExploreModel) string {
 	)
 
 	if outCount == 0 {
-		content.WriteString(noneStyle.Render("  no outbound dependencies") + "\n")
-	} else {
-		navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
-		for _, integ := range svc.Integrations {
-			isInternal := m.nameIdx.IsInternal(integ.ClientID)
-
-			navIdx := -1
-			for ni, nInteg := range navigable {
-				if nInteg.ClientID == integ.ClientID {
-					navIdx = ni
-					break
-				}
-			}
-			isCursor := navIdx >= 0 && navIdx == m.detailCursor
-
-			prefix := "    "
-			var line string
-
-			if isCursor {
-				prefix = "  " + cursorStyle.Render("") + " "
-				line = cursorStyle.Render(integ.ClientID)
-			} else if isInternal {
-				prefix = "  " + arrowOutStyle.Render("") + " "
-				line = internalStyle.Render(integ.ClientID)
-			} else {
-				prefix = "  " + dimStyle.Render("") + " "
-				line = externalStyle.Render(integ.ClientID)
-			}
-
-			if !isInternal {
-				line += " " + externalTagStyle.Render("ext")
-			}
-
-			if isInternal {
-				line += renderVersionAnnotation(integ, m.services, m.nameIdx)
-			}
-
-			content.WriteString(prefix + line + "\n")
-		}
+		s.WriteString(noneStyle.Render("  no outbound dependencies") + "\n")
+		return s.String()
 	}
 
-	// Depended on by
-	content.WriteString(
+	navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
+	for _, integ := range svc.Integrations {
+		isInternal := m.nameIdx.IsInternal(integ.ClientID)
+		navIdx := findNavIndex(integ, navigable)
+		isCursor := navIdx >= 0 && navIdx == m.detailCursor
+		s.WriteString(renderIntegrationLine(integ, isInternal, isCursor, m.services, m.nameIdx))
+	}
+	return s.String()
+}
+
+func renderDependentLine(dep string, isCursor bool, svc *scanner.Service, services []scanner.Service, nameIdx *scanner.NameIndex) string {
+	var prefix, line string
+	if isCursor {
+		prefix = "  " + cursorStyle.Render("") + " "
+		line = cursorStyle.Render(dep)
+	} else {
+		prefix = "  " + arrowInStyle.Render("") + " "
+		line = internalStyle.Render(dep)
+	}
+	line += renderReverseStaleAnnotation(dep, svc, services, nameIdx)
+	return prefix + line + "\n"
+}
+
+func renderDetailInbound(svc *scanner.Service, m ExploreModel) string {
+	var s strings.Builder
+	inCount := len(svc.DependedOnBy)
+
+	s.WriteString(
 		sectionHeaderStyle.Render(
 			arrowInStyle.Render("")+"  Depended on by "+
 				sectionCountStyle.Render(fmt.Sprintf("(%d)", inCount)),
@@ -473,57 +499,71 @@ func renderDetail(m ExploreModel) string {
 	)
 
 	if inCount == 0 {
-		content.WriteString(noneStyle.Render("  no inbound dependencies") + "\n")
-	} else {
-		navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
-		navOffset := len(navigable)
-
-		for i, dep := range svc.DependedOnBy {
-			isCursor := m.detailCursor == navOffset+i
-
-			var prefix, line string
-			if isCursor {
-				prefix = "  " + cursorStyle.Render("") + " "
-				line = cursorStyle.Render(dep)
-			} else {
-				prefix = "  " + arrowInStyle.Render("") + " "
-				line = internalStyle.Render(dep)
-			}
-
-			line += renderReverseStaleAnnotation(dep, svc, m.services, m.nameIdx)
-			content.WriteString(prefix + line + "\n")
-		}
+		s.WriteString(noneStyle.Render("  no inbound dependencies") + "\n")
+		return s.String()
 	}
+
+	navigable := getNavigableIntegrations(svc.Integrations, m.nameIdx)
+	navOffset := len(navigable)
+	for i, dep := range svc.DependedOnBy {
+		isCursor := m.detailCursor == navOffset+i
+		s.WriteString(renderDependentLine(dep, isCursor, svc, m.services, m.nameIdx))
+	}
+	return s.String()
+}
+
+func renderDetailFooter(m ExploreModel) string {
+	if m.enteringHops {
+		return renderHopInputFooter(m)
+	}
+	return renderNormalFooter(m)
+}
+
+func renderHopInputFooter(m ExploreModel) string {
+	prompt := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("  Hops: ")
+	val := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Render(m.hopInput)
+	cursor := lipgloss.NewStyle().Foreground(colorAccent).Render("█")
+	return prompt + val + cursor + "  " + dimStyle.Render("enter to export · esc to cancel")
+}
+
+func renderNormalFooter(m ExploreModel) string {
+	backDesc := "back"
+	if len(m.navStack) > 0 {
+		backDesc = "back (history)"
+	}
+	hints := []curd.Hint{
+		{Key: "esc", Desc: backDesc},
+		{Key: "enter", Desc: "navigate"},
+		{Key: "j/k", Desc: "move"},
+		{Key: "g", Desc: "graph"},
+		{Key: "q", Desc: "menu"},
+	}
+	footer := curd.RenderHintBar(st, hints)
+	if m.exportFlash != "" {
+		flashStyle := lipgloss.NewStyle().Foreground(colorGreen).Bold(true).PaddingLeft(2)
+		if strings.HasPrefix(m.exportFlash, "✗") {
+			flashStyle = lipgloss.NewStyle().Foreground(colorRed).Bold(true).PaddingLeft(2)
+		}
+		footer = flashStyle.Render(m.exportFlash) + "\n" + footer
+	}
+	return footer
+}
+
+func renderDetail(m ExploreModel) string {
+	svc := m.selectedService
+	if svc == nil {
+		return ""
+	}
+
+	contentWidth := max(m.width-8, 40)
+
+	var content strings.Builder
+	content.WriteString(renderDetailHeader(svc))
+	content.WriteString(renderDetailOutbound(svc, m))
+	content.WriteString(renderDetailInbound(svc, m))
 
 	box := detailBoxStyle.Width(contentWidth).Render(content.String())
-
-	var footer string
-	if m.enteringHops {
-		prompt := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render("  Hops: ")
-		val := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Render(m.hopInput)
-		cursor := lipgloss.NewStyle().Foreground(colorAccent).Render("█")
-		footer = prompt + val + cursor + "  " + dimStyle.Render("enter to export · esc to cancel")
-	} else {
-		backDesc := "back"
-		if len(m.navStack) > 0 {
-			backDesc = "back (history)"
-		}
-		hints := []curd.Hint{
-			{Key: "esc", Desc: backDesc},
-			{Key: "enter", Desc: "navigate"},
-			{Key: "j/k", Desc: "move"},
-			{Key: "g", Desc: "graph"},
-			{Key: "q", Desc: "menu"},
-		}
-		footer = curd.RenderHintBar(st, hints)
-		if m.exportFlash != "" {
-			flashStyle := lipgloss.NewStyle().Foreground(colorGreen).Bold(true).PaddingLeft(2)
-			if strings.HasPrefix(m.exportFlash, "✗") {
-				flashStyle = lipgloss.NewStyle().Foreground(colorRed).Bold(true).PaddingLeft(2)
-			}
-			footer = flashStyle.Render(m.exportFlash) + "\n" + footer
-		}
-	}
+	footer := renderDetailFooter(m)
 
 	return lipgloss.JoinVertical(lipgloss.Left, box, footer)
 }
@@ -592,94 +632,105 @@ func getNavigableCount(svc *scanner.Service, idx *scanner.NameIndex) int {
 func handleExploreDetailUpdate(m ExploreModel, msg tea.Msg) (ExploreModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		// Handle hop input mode
 		if m.enteringHops {
-			switch msg.String() {
-			case "enter":
-				hops := 1
-				if m.hopInput != "" {
-					if n, err := strconv.Atoi(m.hopInput); err == nil && n > 0 {
-						hops = n
-					}
-				}
-				m.enteringHops = false
-				m.hopInput = ""
-				return m, func() tea.Msg {
-					return ExportGraphMsg{
-						Service: m.selectedService.Name,
-						Hops:    hops,
-					}
-				}
-			case "esc":
-				m.enteringHops = false
-				m.hopInput = ""
-				return m, nil
-			case "backspace":
-				if len(m.hopInput) > 0 {
-					m.hopInput = m.hopInput[:len(m.hopInput)-1]
-				}
-				return m, nil
-			default:
-				ch := msg.String()
-				if len(ch) == 1 && ch[0] >= '0' && ch[0] <= '9' {
-					m.hopInput += ch
-				}
-				return m, nil
-			}
+			return handleHopInput(m, msg)
 		}
-
-		maxItems := getNavigableCount(m.selectedService, m.nameIdx)
-
-		switch msg.String() {
-		case "backspace":
-			if !m.popNav() {
-				m.view = exploreList
-				m.detailCursor = 0
-			}
-			return m, nil
-
-		case "up", "k":
-			if m.detailCursor > 0 {
-				m.detailCursor--
-			}
-			return m, nil
-
-		case "down", "j":
-			if m.detailCursor < maxItems-1 {
-				m.detailCursor++
-			}
-			return m, nil
-
-		case "g":
-			m.enteringHops = true
-			m.hopInput = "1"
-			m.exportFlash = ""
-			return m, nil
-
-		case "enter":
-			targetName := resolveDetailTarget(m)
-			if targetName != "" {
-				for i := range m.services {
-					if m.services[i].Name == targetName {
-						m.pushNav()
-						m.selectedService = &m.services[i]
-						m.detailCursor = 0
-						return m, nil
-					}
-				}
-			}
-			return m, nil
-		}
-
+		return handleDetailNavKey(m, msg)
 	case GraphExportedMsg:
-		if msg.Err != nil {
-			m.exportFlash = "✗ " + msg.Err.Error()
-		} else {
-			m.exportFlash = "✓ opened graph"
+		return handleGraphExported(m, msg), nil
+	}
+	return m, nil
+}
+
+func handleHopInput(m ExploreModel, msg tea.KeyPressMsg) (ExploreModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		hops := 1
+		if m.hopInput != "" {
+			if n, err := strconv.Atoi(m.hopInput); err == nil && n > 0 {
+				hops = n
+			}
+		}
+		m.enteringHops = false
+		m.hopInput = ""
+		return m, func() tea.Msg {
+			return ExportGraphMsg{
+				Service: m.selectedService.Name,
+				Hops:    hops,
+			}
+		}
+	case "esc":
+		m.enteringHops = false
+		m.hopInput = ""
+		return m, nil
+	case "backspace":
+		if len(m.hopInput) > 0 {
+			m.hopInput = m.hopInput[:len(m.hopInput)-1]
+		}
+		return m, nil
+	default:
+		ch := msg.String()
+		if len(ch) == 1 && ch[0] >= '0' && ch[0] <= '9' {
+			m.hopInput += ch
 		}
 		return m, nil
 	}
+}
+
+func handleDetailNavKey(m ExploreModel, msg tea.KeyPressMsg) (ExploreModel, tea.Cmd) {
+	maxItems := getNavigableCount(m.selectedService, m.nameIdx)
+
+	switch msg.String() {
+	case "backspace":
+		if !m.popNav() {
+			m.view = exploreList
+			m.detailCursor = 0
+		}
+		return m, nil
+	case "up", "k":
+		if m.detailCursor > 0 {
+			m.detailCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.detailCursor < maxItems-1 {
+			m.detailCursor++
+		}
+		return m, nil
+	case "g":
+		m.enteringHops = true
+		m.hopInput = "1"
+		m.exportFlash = ""
+		return m, nil
+	case "enter":
+		return handleDetailEnter(m), nil
+	}
 	return m, nil
+}
+
+func handleDetailEnter(m ExploreModel) ExploreModel {
+	targetName := resolveDetailTarget(m)
+	if targetName == "" {
+		return m
+	}
+	for i := range m.services {
+		if m.services[i].Name == targetName {
+			m.pushNav()
+			m.selectedService = &m.services[i]
+			m.detailCursor = 0
+			return m
+		}
+	}
+	return m
+}
+
+func handleGraphExported(m ExploreModel, msg GraphExportedMsg) ExploreModel {
+	if msg.Err != nil {
+		m.exportFlash = "✗ " + msg.Err.Error()
+	} else {
+		m.exportFlash = "✓ opened graph"
+	}
+	return m
 }
 
 func resolveDetailTarget(m ExploreModel) string {
