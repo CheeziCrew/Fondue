@@ -6,7 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
-	github.com/CheeziCrew/curd v0.0.0
+	github.com/CheeziCrew/curd v0.1.0
 	github.com/sahilm/fuzzy v0.1.1
 )
 
@@ -29,5 +29,3 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 )
-
-replace github.com/CheeziCrew/curd => ../curd
