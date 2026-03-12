@@ -1,5 +1,7 @@
 # Fondue
 
+![fondue](https://github.com/user-attachments/assets/d03ae127-72ec-4c90-b675-9ac0dd9426b7)
+
 Melt through your microservice dependencies. Interactive TUI for scanning Maven-based Java services, extracting integration configs, and visualizing the dependency graph.
 
 ## Features
