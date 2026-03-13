@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/CheeziCrew/fondue/scanner"
@@ -204,7 +203,7 @@ func CollectSubgraph(root string, services []scanner.Service, idx *scanner.NameI
 // ExportPNG generates a subgraph DOT, pipes through graphviz, writes a temp PNG, and opens it.
 // Returns the temp file path or an error.
 func ExportPNG(root string, services []scanner.Service, idx *scanner.NameIndex, hops int) (string, error) {
-	if _, err := exec.LookPath("dot"); err != nil {
+	if _, err := lookPath("dot"); err != nil {
 		return "", fmt.Errorf("graphviz not installed (brew install graphviz)")
 	}
 
@@ -219,16 +218,12 @@ func ExportPNG(root string, services []scanner.Service, idx *scanner.NameIndex, 
 	}
 	tmpFile.Close()
 
-	cmd := exec.Command("dot", "-Tpng", "-o", tmpFile.Name())
-	cmd.Stdin = &buf
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := runDot(buf.Bytes(), tmpFile.Name()); err != nil {
 		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("dot: %s", strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("dot: %s", err.Error())
 	}
 
-	// Open the image
-	openCmd := exec.Command("open", tmpFile.Name())
-	if err := openCmd.Start(); err != nil {
+	if err := openFile(tmpFile.Name()); err != nil {
 		return tmpFile.Name(), fmt.Errorf("open: %w", err)
 	}
 
