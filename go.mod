@@ -6,12 +6,12 @@ require (
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
-	github.com/CheeziCrew/curd v0.2.5
+	github.com/CheeziCrew/curd v0.2.8
+	github.com/atotto/clipboard v0.1.4
 	github.com/sahilm/fuzzy v0.1.1
 )
 
 require (
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/harmonica v0.2.0 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260309091805-903bfd0cf188 // indirect
