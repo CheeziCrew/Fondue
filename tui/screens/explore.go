@@ -6,11 +6,15 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 	"github.com/CheeziCrew/curd"
+	"github.com/CheeziCrew/fondue/graph"
 	"github.com/CheeziCrew/fondue/scanner"
 	"github.com/sahilm/fuzzy"
 )
@@ -54,7 +58,11 @@ type ExploreModel struct {
 	// Graph export hop input
 	enteringHops bool
 	hopInput     string
-	exportFlash  string
+	flash        curd.FlashModel
+
+	// Impact analysis overlay
+	showingImpact bool
+	impactView    viewport.Model
 }
 
 type navEntry struct {
@@ -69,6 +77,7 @@ func NewExplore(services []scanner.Service, idx *scanner.NameIndex, width, heigh
 		view:     exploreList,
 		width:    width,
 		height:   height,
+		flash:    curd.NewFlashModel(palette),
 	}
 	m.list = newServiceList(services, idx, width, height)
 	return m
@@ -82,6 +91,10 @@ func (m ExploreModel) Update(msg tea.Msg) (ExploreModel, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(msg.Width, msg.Height)
+		return m, nil
+
+	case curd.FlashClearMsg:
+		m.flash = m.flash.Clear()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -535,21 +548,28 @@ func renderNormalFooter(m ExploreModel) string {
 		{Key: "esc", Desc: backDesc},
 		{Key: "enter", Desc: "navigate"},
 		{Key: "j/k", Desc: "move"},
+		{Key: "y", Desc: "copy"},
+		{Key: "i", Desc: "impact"},
 		{Key: "g", Desc: "graph"},
 		{Key: "q", Desc: "menu"},
 	}
 	footer := curd.RenderHintBar(st, hints)
-	if m.exportFlash != "" {
-		flashStyle := lipgloss.NewStyle().Foreground(colorGreen).Bold(true).PaddingLeft(2)
-		if strings.HasPrefix(m.exportFlash, "✗") {
-			flashStyle = lipgloss.NewStyle().Foreground(colorRed).Bold(true).PaddingLeft(2)
-		}
-		footer = flashStyle.Render(m.exportFlash) + "\n" + footer
+	if m.flash.Active() {
+		footer = m.flash.View() + "\n" + footer
 	}
 	return footer
 }
 
 func renderDetail(m ExploreModel) string {
+	if m.showingImpact {
+		hints := []curd.Hint{
+			{Key: "esc/i", Desc: "back"},
+			{Key: "↑/↓", Desc: "scroll"},
+		}
+		help := curd.RenderHintBar(st, hints)
+		return lipgloss.JoinVertical(lipgloss.Left, m.impactView.View(), help)
+	}
+
 	svc := m.selectedService
 	if svc == nil {
 		return ""
@@ -632,14 +652,34 @@ func getNavigableCount(svc *scanner.Service, idx *scanner.NameIndex) int {
 func handleExploreDetailUpdate(m ExploreModel, msg tea.Msg) (ExploreModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if m.showingImpact {
+			return handleImpactKey(m, msg)
+		}
 		if m.enteringHops {
 			return handleHopInput(m, msg)
 		}
 		return handleDetailNavKey(m, msg)
 	case GraphExportedMsg:
-		return handleGraphExported(m, msg), nil
+		return handleGraphExported(m, msg)
+	}
+
+	if m.showingImpact {
+		var cmd tea.Cmd
+		m.impactView, cmd = m.impactView.Update(msg)
+		return m, cmd
 	}
 	return m, nil
+}
+
+func handleImpactKey(m ExploreModel, msg tea.KeyPressMsg) (ExploreModel, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "i":
+		m.showingImpact = false
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.impactView, cmd = m.impactView.Update(msg)
+	return m, cmd
 }
 
 func handleHopInput(m ExploreModel, msg tea.KeyPressMsg) (ExploreModel, tea.Cmd) {
@@ -700,12 +740,101 @@ func handleDetailNavKey(m ExploreModel, msg tea.KeyPressMsg) (ExploreModel, tea.
 	case "g":
 		m.enteringHops = true
 		m.hopInput = "1"
-		m.exportFlash = ""
+		m.flash = m.flash.Clear()
 		return m, nil
+	case "y":
+		return handleCopyToClipboard(m)
+	case "i":
+		return handleShowImpact(m)
 	case "enter":
 		return handleDetailEnter(m), nil
 	}
 	return m, nil
+}
+
+func handleCopyToClipboard(m ExploreModel) (ExploreModel, tea.Cmd) {
+	svc := m.selectedService
+	if svc == nil {
+		return m, nil
+	}
+
+	// Build clipboard content: service name + dependency list.
+	var b strings.Builder
+	b.WriteString(svc.Name)
+	if len(svc.Integrations) > 0 {
+		b.WriteString("\n\nDependencies:\n")
+		for _, integ := range svc.Integrations {
+			b.WriteString("  " + integ.ClientID + "\n")
+		}
+	}
+	if len(svc.DependedOnBy) > 0 {
+		b.WriteString("\nDepended on by:\n")
+		for _, dep := range svc.DependedOnBy {
+			b.WriteString("  " + dep + "\n")
+		}
+	}
+
+	if err := clipboard.WriteAll(b.String()); err != nil {
+		var cmd tea.Cmd
+		m.flash, cmd = m.flash.ShowError("clipboard: "+err.Error(), 3*time.Second)
+		return m, cmd
+	}
+
+	var cmd tea.Cmd
+	m.flash, cmd = m.flash.Show("copied to clipboard", 3*time.Second)
+	return m, cmd
+}
+
+func handleShowImpact(m ExploreModel) (ExploreModel, tea.Cmd) {
+	svc := m.selectedService
+	if svc == nil {
+		return m, nil
+	}
+
+	entries := graph.ImpactAnalysis(svc.Name, m.services, m.nameIdx)
+	content := renderImpactContent(svc.Name, entries)
+
+	h := m.height - 6
+	if h < 10 {
+		h = 10
+	}
+	w := m.width - 8
+	if w < 40 {
+		w = 40
+	}
+
+	m.impactView = viewport.New(viewport.WithWidth(w), viewport.WithHeight(h))
+	m.impactView.SetContent(content)
+	m.showingImpact = true
+	return m, nil
+}
+
+func renderImpactContent(root string, entries []graph.ImpactEntry) string {
+	var s strings.Builder
+	s.WriteString(detailTitleStyle.Render("  🔥 Impact Analysis: "+root) + "\n\n")
+
+	if len(entries) == 0 {
+		s.WriteString(dimStyle.Render("  No downstream consumers found.") + "\n")
+		return s.String()
+	}
+
+	s.WriteString(lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(
+		fmt.Sprintf("  %d service(s) transitively affected", len(entries))) + "\n\n")
+
+	prevDepth := 0
+	for _, e := range entries {
+		if e.Depth != prevDepth {
+			s.WriteString("\n")
+			s.WriteString(sectionHeaderStyle.Render(
+				fmt.Sprintf("  Depth %d", e.Depth)) + "\n")
+			prevDepth = e.Depth
+		}
+		indent := strings.Repeat("  ", e.Depth)
+		s.WriteString(indent + arrowInStyle.Render("") + " " +
+			lipgloss.NewStyle().Foreground(colorFg).Render(e.Name) + "\n")
+	}
+
+	return s.String()
 }
 
 func handleDetailEnter(m ExploreModel) ExploreModel {
@@ -724,13 +853,15 @@ func handleDetailEnter(m ExploreModel) ExploreModel {
 	return m
 }
 
-func handleGraphExported(m ExploreModel, msg GraphExportedMsg) ExploreModel {
+func handleGraphExported(m ExploreModel, msg GraphExportedMsg) (ExploreModel, tea.Cmd) {
 	if msg.Err != nil {
-		m.exportFlash = "✗ " + msg.Err.Error()
-	} else {
-		m.exportFlash = "✓ opened graph"
+		var cmd tea.Cmd
+		m.flash, cmd = m.flash.ShowError(msg.Err.Error(), 4*time.Second)
+		return m, cmd
 	}
-	return m
+	var cmd tea.Cmd
+	m.flash, cmd = m.flash.Show("opened graph", 4*time.Second)
+	return m, cmd
 }
 
 func resolveDetailTarget(m ExploreModel) string {

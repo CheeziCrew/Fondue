@@ -98,6 +98,7 @@ type statsData struct {
 	topOutbound   []ranked
 	topInbound    []ranked
 	staleHotspots []ranked
+	cycles        []graph.Cycle
 	// Distribution buckets: 0, 1-2, 3-5, 6-10, 11+
 	distribution [5]int
 }
@@ -147,6 +148,8 @@ func collectStats(services []scanner.Service, idx *scanner.NameIndex) statsData 
 	sortRanked(d.topInbound)
 	sortRanked(d.staleHotspots)
 
+	d.cycles = graph.DetectCycles(services, idx)
+
 	return d
 }
 
@@ -183,6 +186,12 @@ func renderStats(services []scanner.Service, idx *scanner.NameIndex, width int) 
 	if len(d.staleHotspots) > 0 {
 		s.WriteString(sectionHeaderStyle.Render("  ⚠ Stale Hotspots") + "\n")
 		s.WriteString(renderStaleChart(d.staleHotspots, contentWidth) + "\n")
+	}
+
+	// ── Cycles ──
+	if len(d.cycles) > 0 {
+		s.WriteString(sectionHeaderStyle.Render(fmt.Sprintf("  🔄 Cycles (%d)", len(d.cycles))) + "\n")
+		s.WriteString(renderCycles(d.cycles) + "\n")
 	}
 
 	// ── Isolated ──
@@ -377,6 +386,23 @@ func renderStaleChart(items []ranked, maxWidth int) string {
 		count := staleStyle.Render(fmt.Sprintf(" ⚠ %d", r.count))
 
 		s.WriteString("  " + name + " " + bar + count + "\n")
+	}
+	return s.String()
+}
+
+func renderCycles(cycles []graph.Cycle) string {
+	var s strings.Builder
+	for _, cycle := range cycles {
+		s.WriteString("  ")
+		for i, name := range cycle {
+			if i > 0 {
+				s.WriteString(dimStyle.Render(" → "))
+			}
+			s.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Render(name))
+		}
+		s.WriteString(dimStyle.Render(" → "))
+		s.WriteString(lipgloss.NewStyle().Foreground(colorRed).Render(cycle[0]))
+		s.WriteString("\n")
 	}
 	return s.String()
 }

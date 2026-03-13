@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -359,7 +360,7 @@ func TestRenderDetailFooterExportFlash(t *testing.T) {
 	svc := testServices()
 	idx := testNameIndex(svc)
 	m := NewExplore(svc, idx, 80, 24)
-	m.exportFlash = "opened graph"
+	m.flash, _ = m.flash.Show("opened graph", 4*time.Second)
 	footer := renderDetailFooter(m)
 	if !strings.Contains(footer, "opened graph") {
 		t.Error("footer should show export flash message")
@@ -370,7 +371,7 @@ func TestRenderDetailFooterExportFlashError(t *testing.T) {
 	svc := testServices()
 	idx := testNameIndex(svc)
 	m := NewExplore(svc, idx, 80, 24)
-	m.exportFlash = "error"
+	m.flash, _ = m.flash.ShowError("error", 4*time.Second)
 	footer := renderDetailFooter(m)
 	if !strings.Contains(footer, "error") {
 		t.Error("footer should show error flash message")
@@ -641,17 +642,31 @@ func TestHandleGraphExported(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		m := NewExplore(svc, idx, 80, 24)
-		m2 := handleGraphExported(m, GraphExportedMsg{Err: nil})
-		if !strings.Contains(m2.exportFlash, "opened") {
-			t.Errorf("exportFlash = %q", m2.exportFlash)
+		m2, cmd := handleGraphExported(m, GraphExportedMsg{Err: nil})
+		if !m2.flash.Active() {
+			t.Error("expected flash to be active after success export")
+		}
+		flashView := m2.flash.View()
+		if !strings.Contains(flashView, "opened graph") {
+			t.Errorf("flash view = %q", flashView)
+		}
+		if cmd == nil {
+			t.Error("expected flash timer cmd")
 		}
 	})
 
 	t.Run("error", func(t *testing.T) {
 		m := NewExplore(svc, idx, 80, 24)
-		m2 := handleGraphExported(m, GraphExportedMsg{Err: fmt.Errorf("test error")})
-		if !strings.Contains(m2.exportFlash, "test error") {
-			t.Errorf("exportFlash = %q", m2.exportFlash)
+		m2, cmd := handleGraphExported(m, GraphExportedMsg{Err: fmt.Errorf("test error")})
+		if !m2.flash.Active() {
+			t.Error("expected flash to be active after error export")
+		}
+		flashView := m2.flash.View()
+		if !strings.Contains(flashView, "test error") {
+			t.Errorf("flash view = %q", flashView)
+		}
+		if cmd == nil {
+			t.Error("expected flash timer cmd")
 		}
 	})
 }
@@ -1125,11 +1140,11 @@ func TestExploreDetailUpdateGraphExportedMsg(t *testing.T) {
 
 	msg := GraphExportedMsg{Err: nil}
 	m2, cmd := m.Update(msg)
-	if !strings.Contains(m2.exportFlash, "opened") {
-		t.Errorf("exportFlash = %q, expected 'opened'", m2.exportFlash)
+	if !m2.flash.Active() {
+		t.Error("expected flash to be active after graph export")
 	}
-	if cmd != nil {
-		t.Error("expected nil cmd")
+	if cmd == nil {
+		t.Error("expected flash timer cmd")
 	}
 }
 
@@ -1631,17 +1646,17 @@ func TestRenderNormalFooterErrorFlash(t *testing.T) {
 	svc := testServices()
 	idx := testNameIndex(svc)
 
-	// Test with error prefix (✗)
+	// Test with error flash
 	m := NewExplore(svc, idx, 80, 24)
-	m.exportFlash = "✗ graphviz not found"
+	m.flash, _ = m.flash.ShowError("graphviz not found", 4*time.Second)
 	footer := renderDetailFooter(m)
 	if footer == "" {
 		t.Error("expected non-empty footer for error flash")
 	}
 
-	// Test with success prefix
+	// Test with success flash
 	m2 := NewExplore(svc, idx, 80, 24)
-	m2.exportFlash = "✓ opened graph"
+	m2.flash, _ = m2.flash.Show("opened graph", 4*time.Second)
 	footer2 := renderDetailFooter(m2)
 	if footer2 == "" {
 		t.Error("expected non-empty footer for success flash")
