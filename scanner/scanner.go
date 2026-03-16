@@ -33,6 +33,7 @@ type ScanConfig struct {
 // Built once after scanning, reused everywhere.
 type NameIndex struct {
 	nameMap map[string]string
+	aliases map[string][]string // collision aliases: stripped name → all full names
 }
 
 var (
@@ -82,7 +83,8 @@ func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 	services := make([]Service, 0, 80)
 	serviceNames := make(map[string]bool)
 
-	services, err = scanPrefixedRepos(basePath, cfg.RepoPrefixes, services, serviceNames)
+	var collisionAliases map[string][]string
+	services, collisionAliases, err = scanPrefixedRepos(basePath, cfg.RepoPrefixes, services, serviceNames)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -90,6 +92,7 @@ func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 	services = scanStandaloneRepos(basePath, cfg.StandaloneRepos, services, serviceNames)
 
 	idx := NewNameIndex(serviceNames)
+	idx.addAliases(collisionAliases)
 	normalizeClientIDs(services, idx)
 	applyReverseIndex(services, idx)
 
@@ -100,20 +103,44 @@ func Scan(basePath string, cfg ScanConfig) ([]Service, *NameIndex, error) {
 	return services, idx, nil
 }
 
-func scanPrefixedRepos(basePath string, prefixes []string, services []Service, serviceNames map[string]bool) ([]Service, error) {
+func scanPrefixedRepos(basePath string, prefixes []string, services []Service, serviceNames map[string]bool) ([]Service, map[string][]string, error) {
+	type candidate struct {
+		dir          string
+		strippedName string
+		fullName     string
+	}
+	var candidates []candidate
+	nameCount := make(map[string]int)
+
 	for _, prefix := range prefixes {
 		dirs, err := filepath.Glob(filepath.Join(basePath, prefix+"*"))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, dir := range dirs {
-			svc, ok := tryBuildService(dir, strings.TrimPrefix(filepath.Base(dir), prefix), serviceNames)
-			if ok {
-				services = append(services, svc)
+			fullName := filepath.Base(dir)
+			stripped := strings.TrimPrefix(fullName, prefix)
+			candidates = append(candidates, candidate{dir, stripped, fullName})
+			nameCount[stripped]++
+		}
+	}
+
+	aliases := make(map[string][]string)
+	for _, c := range candidates {
+		name := c.strippedName
+		if nameCount[c.strippedName] > 1 {
+			name = c.fullName
+		}
+		svc, ok := tryBuildService(c.dir, name, serviceNames)
+		if ok {
+			services = append(services, svc)
+			if nameCount[c.strippedName] > 1 {
+				aliases[c.strippedName] = append(aliases[c.strippedName], name)
 			}
 		}
 	}
-	return services, nil
+
+	return services, aliases, nil
 }
 
 func scanStandaloneRepos(basePath string, repos map[string]string, services []Service, serviceNames map[string]bool) []Service {
@@ -153,20 +180,20 @@ func tryBuildService(dir, name string, serviceNames map[string]bool) (Service, b
 func normalizeClientIDs(services []Service, idx *NameIndex) {
 	for i := range services {
 		for j := range services[i].Integrations {
-			normalizeClientID(&services[i].Integrations[j], idx)
+			normalizeClientID(&services[i].Integrations[j], idx, services[i].Name)
 		}
 	}
 }
 
-func normalizeClientID(integ *Integration, idx *NameIndex) {
-	if idx.Resolve(integ.ClientID) != "" {
+func normalizeClientID(integ *Integration, idx *NameIndex, selfName string) {
+	if r := idx.ResolveExcluding(integ.ClientID, selfName); r != "" {
 		return
 	}
 	lower := strings.ToLower(integ.ClientID)
-	for _, suffix := range []string{"client", "integration", "service"} {
+	for _, suffix := range []string{"client", "integration", "service", "process"} {
 		trimmed := strings.TrimSuffix(lower, suffix)
 		if trimmed != lower {
-			if resolved := idx.Resolve(trimmed); resolved != "" {
+			if resolved := idx.ResolveExcluding(trimmed, selfName); resolved != "" {
 				integ.ClientID = resolved
 				return
 			}
@@ -223,6 +250,20 @@ func NewNameIndexFromServices(services []Service) *NameIndex {
 	return NewNameIndex(names)
 }
 
+func (idx *NameIndex) addAliases(aliasGroups map[string][]string) {
+	if len(aliasGroups) == 0 {
+		return
+	}
+	idx.aliases = make(map[string][]string)
+	for alias, names := range aliasGroups {
+		idx.aliases[alias] = names
+		stripped := strings.ReplaceAll(alias, "-", "")
+		if stripped != alias {
+			idx.aliases[stripped] = names
+		}
+	}
+}
+
 func (idx *NameIndex) Resolve(clientID string) string {
 	lower := strings.ToLower(clientID)
 	if name, ok := idx.nameMap[lower]; ok {
@@ -233,6 +274,28 @@ func (idx *NameIndex) Resolve(clientID string) string {
 		return name
 	}
 	return ""
+}
+
+// ResolveExcluding resolves a client ID but skips the excluded name.
+// Falls back to collision aliases when the primary match is excluded.
+func (idx *NameIndex) ResolveExcluding(clientID, exclude string) string {
+	result := idx.Resolve(clientID)
+	if result != "" && result != exclude {
+		return result
+	}
+	if idx.aliases != nil {
+		lower := strings.ToLower(clientID)
+		for _, key := range []string{lower, strings.ReplaceAll(lower, "-", "")} {
+			if names, ok := idx.aliases[key]; ok {
+				for _, n := range names {
+					if n != exclude {
+						return n
+					}
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (idx *NameIndex) IsInternal(clientID string) bool {

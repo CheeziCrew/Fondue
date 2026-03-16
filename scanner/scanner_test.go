@@ -586,6 +586,7 @@ func TestNormalizeClientID(t *testing.T) {
 		{"client suffix", "partyclient", "party"},
 		{"integration suffix", "partyintegration", "party"},
 		{"service suffix", "partyservice", "party"},
+		{"process suffix", "partyprocess", "party"},
 		{"unknown stays unchanged", "unknown-thing", "unknown-thing"},
 		{"upper case client suffix", "PartyClient", "party"},
 	}
@@ -593,7 +594,7 @@ func TestNormalizeClientID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			integ := &Integration{ClientID: tt.input}
-			normalizeClientID(integ, idx)
+			normalizeClientID(integ, idx, "other-service")
 			if integ.ClientID != tt.want {
 				t.Errorf("normalizeClientID(%q) = %q, want %q", tt.input, integ.ClientID, tt.want)
 			}
@@ -1270,6 +1271,91 @@ func TestResolveHyphenStripped(t *testing.T) {
 	got := idx.Resolve("case.data")
 	if got != "case-data" {
 		t.Errorf("Resolve('case.data') = %q, want 'case-data'", got)
+	}
+}
+
+// ── Prefix collision: two prefixes strip to same name ────────────────
+
+func TestScanPrefixCollisionKeepsBoth(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// api-service-e-signing integrates with pw-e-signing via CLIENT_ID "esigningprocess"
+	svcA := filepath.Join(tmpDir, "api-service-e-signing")
+	javaDirA := filepath.Join(svcA, "src", "main", "java", "se", "sundsvall", "esigning", "integration", "esigningprocess")
+	os.MkdirAll(javaDirA, 0755)
+	os.WriteFile(filepath.Join(javaDirA, "Config.java"), []byte(`public class C { public static final String CLIENT_ID = "esigningprocess"; }`), 0644)
+	os.WriteFile(filepath.Join(svcA, "pom.xml"), []byte(`<project><version>1.0</version></project>`), 0644)
+
+	svcB := filepath.Join(tmpDir, "pw-e-signing")
+	javaDirB := filepath.Join(svcB, "src", "main", "java")
+	os.MkdirAll(javaDirB, 0755)
+	os.WriteFile(filepath.Join(svcB, "pom.xml"), []byte(`<project><version>2.0</version></project>`), 0644)
+
+	cfg := ScanConfig{
+		RepoPrefixes:    []string{"api-service-", "pw-"},
+		StandaloneRepos: map[string]string{},
+	}
+
+	services, _, err := Scan(tmpDir, cfg)
+	if err != nil {
+		t.Fatalf("Scan() error: %v", err)
+	}
+	if len(services) != 2 {
+		t.Fatalf("expected 2 services (collision should keep both), got %d", len(services))
+	}
+
+	names := map[string]bool{}
+	for _, svc := range services {
+		names[svc.Name] = true
+	}
+	if !names["api-service-e-signing"] {
+		t.Error("expected api-service-e-signing to be present (full basename on collision)")
+	}
+	if !names["pw-e-signing"] {
+		t.Error("expected pw-e-signing to be present (full basename on collision)")
+	}
+
+	// Verify the integration link: api-service-e-signing → pw-e-signing
+	pwSvc := FindService("pw-e-signing", services)
+	if pwSvc == nil {
+		t.Fatal("pw-e-signing not found")
+	}
+	if len(pwSvc.DependedOnBy) == 0 {
+		t.Error("expected pw-e-signing to have dependents (api-service-e-signing should link to it)")
+	}
+	found := false
+	for _, dep := range pwSvc.DependedOnBy {
+		if dep == "api-service-e-signing" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected api-service-e-signing in pw-e-signing.DependedOnBy, got %v", pwSvc.DependedOnBy)
+	}
+}
+
+func TestScanPrefixNoCollisionKeepsStripped(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svcDir := filepath.Join(tmpDir, "api-service-unique-svc")
+	javaDir := filepath.Join(svcDir, "src", "main", "java")
+	os.MkdirAll(javaDir, 0755)
+	os.WriteFile(filepath.Join(svcDir, "pom.xml"), []byte(`<project><version>1.0</version></project>`), 0644)
+
+	cfg := ScanConfig{
+		RepoPrefixes:    []string{"api-service-", "pw-"},
+		StandaloneRepos: map[string]string{},
+	}
+
+	services, _, err := Scan(tmpDir, cfg)
+	if err != nil {
+		t.Fatalf("Scan() error: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(services))
+	}
+	if services[0].Name != "unique-svc" {
+		t.Errorf("Name = %q, want %q (prefix should be stripped when no collision)", services[0].Name, "unique-svc")
 	}
 }
 
