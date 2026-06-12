@@ -8,7 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.3
 	github.com/CheeziCrew/curd v0.2.12
 	github.com/atotto/clipboard v0.1.4
-	github.com/sahilm/fuzzy v0.1.2
+	github.com/sahilm/fuzzy v0.1.3
 )
 
 require (
