@@ -3,10 +3,10 @@ module github.com/CheeziCrew/fondue
 go 1.25.0
 
 require (
-	charm.land/bubbles/v2 v2.2.0
+	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/CheeziCrew/curd v0.2.16
+	github.com/CheeziCrew/curd v0.2.17
 	github.com/atotto/clipboard v0.1.4
 	github.com/sahilm/fuzzy v0.1.3
 )
