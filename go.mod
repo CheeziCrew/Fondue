@@ -6,7 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/CheeziCrew/curd v0.2.18
+	github.com/CheeziCrew/curd v0.2.19
 	github.com/atotto/clipboard v0.1.4
 	github.com/sahilm/fuzzy v0.1.3
 )
