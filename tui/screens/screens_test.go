@@ -1007,7 +1007,10 @@ func TestRenderStaleRepoGroupUnresolved(t *testing.T) {
 }
 
 func TestIsUnresolvedPlaceholder(t *testing.T) {
-	tests := []struct{ input string; want bool }{
+	tests := []struct {
+		input string
+		want  bool
+	}{
 		{"@project.version@", true},
 		{"${project.version}", true},
 		{"1.0.0", false},
@@ -1351,8 +1354,8 @@ func TestCollectServiceStaleEntriesAllBranches(t *testing.T) {
 			Integrations: []scanner.Integration{
 				{ClientID: "backend", SpecVersion: "0.9.0"}, // stale
 				{ClientID: "auth", SpecVersion: "1.0.0"},    // matching
-				{ClientID: "external"},                       // no spec version
-				{ClientID: "unknown", SpecVersion: "1.0"},    // unknown target
+				{ClientID: "external"},                      // no spec version
+				{ClientID: "unknown", SpecVersion: "1.0"},   // unknown target
 			},
 		},
 		{Name: "backend", Version: "1.0.0", DependedOnBy: []string{"gateway"}},
@@ -1402,7 +1405,7 @@ func TestStaleViewScrollable(t *testing.T) {
 func TestCollectStatsDistributionBuckets(t *testing.T) {
 	svcs := []scanner.Service{
 		{Name: "iso"}, // 0 connections
-		{Name: "low", Integrations: []scanner.Integration{{ClientID: "x"}}}, // 1
+		{Name: "low", Integrations: []scanner.Integration{{ClientID: "x"}}},                                   // 1
 		{Name: "mid", Integrations: []scanner.Integration{{ClientID: "a"}, {ClientID: "b"}, {ClientID: "c"}}}, // 3
 		{Name: "high", Integrations: []scanner.Integration{
 			{ClientID: "a"}, {ClientID: "b"}, {ClientID: "c"}, {ClientID: "d"},

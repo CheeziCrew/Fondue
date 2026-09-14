@@ -13,14 +13,14 @@ var (
 
 // Base16 colors from curd.
 var (
-	colorBg      = curd.ColorBg
-	colorRed     = curd.ColorRed
-	colorGreen   = curd.ColorGreen
-	colorYellow  = curd.ColorYellow
-	colorCyan    = curd.ColorCyan
-	colorFg      = curd.ColorFg
-	colorDim     = curd.ColorGray
-	colorAccent  = curd.ColorBrGreen
+	colorBg     = curd.ColorBg
+	colorRed    = curd.ColorRed
+	colorGreen  = curd.ColorGreen
+	colorYellow = curd.ColorYellow
+	colorCyan   = curd.ColorCyan
+	colorFg     = curd.ColorFg
+	colorDim    = curd.ColorGray
+	colorAccent = curd.ColorBrGreen
 )
 
 // ── Shared styles ───────────────────────────────────────────────────

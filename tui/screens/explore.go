@@ -12,10 +12,10 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/CheeziCrew/curd"
 	"github.com/CheeziCrew/fondue/graph"
 	"github.com/CheeziCrew/fondue/scanner"
+	"github.com/atotto/clipboard"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -628,9 +628,9 @@ func renderReverseStaleAnnotation(depName string, svc *scanner.Service, services
 			continue
 		}
 		if integ.SpecVersion == svc.Version {
-			return " " + versionMatchStyle.Render(integ.SpecVersion + " ✓")
+			return " " + versionMatchStyle.Render(integ.SpecVersion+" ✓")
 		}
-		return " " + staleStyle.Render(integ.SpecVersion + " → " + svc.Version + " STALE")
+		return " " + staleStyle.Render(integ.SpecVersion+" → "+svc.Version+" STALE")
 	}
 	return ""
 }

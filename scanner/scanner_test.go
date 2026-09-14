@@ -22,11 +22,11 @@ func TestNameIndexExactMatch(t *testing.T) {
 	}{
 		{"party", "party"},
 		{testCaseData, testCaseData},
-		{"casedata", testCaseData},      // hyphen stripped
-		{"case.data", testCaseData},     // dot variant
-		{"Party", "party"},             // case insensitive
-		{"CASEDATA", testCaseData},      // uppercase + stripped
-		{"nonexistent", ""},            // no match
+		{"casedata", testCaseData},  // hyphen stripped
+		{"case.data", testCaseData}, // dot variant
+		{"Party", "party"},          // case insensitive
+		{"CASEDATA", testCaseData},  // uppercase + stripped
+		{"nonexistent", ""},         // no match
 	}
 
 	for _, tt := range tests {
@@ -48,8 +48,8 @@ func TestNameIndexPluralSingular(t *testing.T) {
 		want  string
 	}{
 		{"relations", "relations"},
-		{"relation", "relations"},    // singular -> plural
-		{"partys", "party"},          // plural -> singular
+		{"relation", "relations"}, // singular -> plural
+		{"partys", "party"},       // plural -> singular
 		{"party", "party"},
 	}
 
@@ -578,9 +578,9 @@ func TestNormalizeClientID(t *testing.T) {
 	idx := NewNameIndex(map[string]bool{"party": true, "notes": true})
 
 	tests := []struct {
-		name    string
-		input   string
-		want    string
+		name  string
+		input string
+		want  string
 	}{
 		{"already resolved", "party", "party"},
 		{"client suffix", "partyclient", "party"},

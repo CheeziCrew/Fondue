@@ -75,10 +75,10 @@ func TestLoadConfigFromInvalidJSON(t *testing.T) {
 
 func TestTryLoadConfig(t *testing.T) {
 	tests := []struct {
-		name     string
-		path     string
-		content  string
-		wantOK   bool
+		name    string
+		path    string
+		content string
+		wantOK  bool
 	}{
 		{
 			name:   "nonexistent file",

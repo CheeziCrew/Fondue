@@ -9,8 +9,8 @@ import (
 // Config holds user-configurable settings for fondue.
 // Loaded from .fondue.json next to the binary or in the scan directory.
 type Config struct {
-	ScanPath       string            `json:"scanPath"`
-	RepoPrefixes   []string          `json:"repoPrefixes"`
+	ScanPath        string            `json:"scanPath"`
+	RepoPrefixes    []string          `json:"repoPrefixes"`
 	StandaloneRepos map[string]string `json:"standaloneRepos"`
 }
 
