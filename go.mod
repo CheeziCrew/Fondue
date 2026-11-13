@@ -1,11 +1,11 @@
 module github.com/CheeziCrew/fondue
 
-go 1.26.0
+go 1.26.7
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/bubbletea/v2 v2.1.1
+	charm.land/lipgloss/v2 v2.1.0
 	github.com/CheeziCrew/curd v0.2.24
 	github.com/atotto/clipboard v0.1.4
 	github.com/sahilm/fuzzy v0.1.3
